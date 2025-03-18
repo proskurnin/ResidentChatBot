@@ -7,6 +7,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardBut
 import os
 from dotenv import load_dotenv
 
+
 # Загружаем переменные из .env
 load_dotenv()
 
