@@ -413,4 +413,27 @@ def finalize_questionnaire(chat_id, user_id):
     bot.send_message(chat_id, "Спасибо, анкета заполнена. Теперь, пожалуйста, отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры. Фотография будет сверяться с фактической обстановкой модераторами. Если Вы хотите воспользоваться подтверждением по документам, сообщите это администратору @proskurninra личным сообщением.")
     user_state[user_id] = "awaiting_photo"
 
+@bot.message_handler(commands=['db'])
+def db_handler(message):
+    # Команда доступна только для администратора
+    if message.from_user.id != int(ADMIN_ID):
+        bot.send_message(message.chat.id, "Нет доступа")
+        return
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    output = "Таблица houses\n"
+    cursor.execute("SELECT * FROM houses")
+    for row in cursor.fetchall():
+        output += " | ".join(map(str, row)) + "\n"
+    output += "\nТаблица users\n"
+    cursor.execute("SELECT * FROM users")
+    for row in cursor.fetchall():
+        output += " | ".join(map(str, row)) + "\n"
+    output += "\nТаблица cars\n"
+    cursor.execute("SELECT * FROM cars")
+    for row in cursor.fetchall():
+        output += " | ".join(map(str, row)) + "\n"
+    conn.close()
+    bot.send_message(message.chat.id, output)
+
 bot.polling()
