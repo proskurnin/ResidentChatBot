@@ -172,11 +172,47 @@ def photo_handler(message):
         if user_id == bot.get_me().id:
             bot.send_message(message.from_user.id, "Фото получено. Ожидайте подтверждения.")
         else:
+            # Извлекаем информацию о пользователе из базы данных
+            conn = sqlite3.connect('database.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, surname, apartment, phone FROM users WHERE tg_id = ?", (user_id,))
+            user_info = cursor.fetchone()
+            conn.close()
+            if user_info:
+                name, surname, apartment, phone = user_info
+            else:
+                name = message.from_user.first_name
+                surname = ""
+                apartment = "не указана"
+                phone = "не указан"
+
+            # Получаем информацию о чате (группе) из pending_users или используем group_id
+            source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
+            try:
+                group = bot.get_chat(source_chat_id)
+                group_title = group.title if group.title else group.username
+            except Exception as e:
+                logging.error(f"Ошибка получения информации о чате: {e}")
+                group_title = "Неизвестный чат"
+
+            # Формируем сообщение для администратора с информацией о пользователе
+            registration_info = (
+                f"Новый пользователь {message.from_user.first_name} (id: {user_id}) подал запрос на регистрацию в чате {group_title} (id: {source_chat_id}).\n"
+                f"Имя: {name}\n"
+                f"Фамилия: {surname}\n"
+                f"Квартира: {apartment}\n"
+                f"Телефон: {phone}"
+            )
+
+            # Создаем клавиатуру с тремя кнопками
             keyboard = InlineKeyboardMarkup(row_width=1)
             allow_button = InlineKeyboardButton("Дать доступ", callback_data=f"allow:{user_id}")
             deny_button = InlineKeyboardButton("Отклонить доступ", callback_data=f"deny:{user_id}")
             request_photo_button = InlineKeyboardButton("Запросить новое фото", callback_data=f"request_photo:{user_id}")
             keyboard.add(allow_button, deny_button, request_photo_button)
+
+            # Отправляем сообщение с информацией и фото администратору
+            bot.send_message(ADMIN_ID, registration_info)
             bot.send_photo(chat_id=ADMIN_ID, photo=message.photo[-1].file_id, reply_markup=keyboard)
             bot.send_message(message.from_user.id, "Фото получено. Ожидайте подтверждения.")
         user_state[user_id] = "photo_sent"
