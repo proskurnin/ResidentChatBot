@@ -131,7 +131,7 @@ def new_member_handler(message):
                 try:
                     bot.restrict_chat_member(group_id, new_member.id, can_send_messages=False)
                 except telebot.apihelper.ApiTelegramException as e:
-                    logging.error(f\"Ошибка ограничения для пользователя {new_member.id}: {e}\")
+                    logging.error(f"Ошибка ограничения для пользователя {new_member.id}: {e}")
             bot.send_message(group_id,
                 f"Добро пожаловать, {new_member.first_name}! Чтобы получить доступ к чату, пожалуйста, пройдите процедуру знакомства и подтверждения. Чтобы получить доступ пройдите по ссылке: https://t.me/{BOT_NAME}?start")
 
