@@ -13,6 +13,8 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardBut
 import os
 from dotenv import load_dotenv
 import sqlite3
+import phonenumbers
+from phonenumbers import NumberParseException, PhoneNumberFormat, format_number
 
 # Загрузка переменных окружения из файла .env и присвоение их соответствующим переменным
 load_dotenv()
@@ -132,9 +134,12 @@ def new_member_handler(message):
                     bot.restrict_chat_member(group_id, new_member.id, can_send_messages=False)
                 except telebot.apihelper.ApiTelegramException as e:
                     logging.error(f"Ошибка ограничения для пользователя {new_member.id}: {e}")
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            access_button = InlineKeyboardButton("Получить доступ", url=f"https://t.me/{BOT_NAME}?start")
+            keyboard.add(access_button)
             bot.send_message(group_id,
-                f"Добро пожаловать, {new_member.first_name}! Чтобы получить доступ к чату, пожалуйста, пройдите процедуру знакомства и подтверждения. Чтобы получить доступ пройдите по ссылке: https://t.me/{BOT_NAME}?start")
-
+                f"Добро пожаловать, {new_member.first_name}! Чтобы получить доступ к чату, пожалуйста, пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
+                reply_markup=keyboard)
 # Обработчик фото для идентификации.
 # Если бот ожидает фото, пересылает фото администратору с кнопками для действий (разрешить, отклонить, запросить новое фото)
 @bot.message_handler(content_types=['photo'])
@@ -272,7 +277,7 @@ def left_member_handler(message):
     conn.commit()
     conn.close()
     if user_id in pending_users:
-        pending_users[user_id]['status'] = 'left'
+        del pending_users[user_id]
 
 # Callback-обработчик для идентификации.
 # Отправляет клавиатуру для подтверждения проживания и логирует информацию о группе.
@@ -323,37 +328,58 @@ def not_residing_handler(call):
             logging.error(f"Ошибка удаления пользователя {user_id} из чата {source_id}: {e}")
     bot.answer_callback_query(call.id)
 
+# Callback-обработчик для выбора опции "Да" при возвращении в группу.
+@bot.callback_query_handler(func=lambda call: call.data == "return_yes")
+def return_yes_handler(call):
+    user_id = call.from_user.id
+    now = datetime.now().isoformat()
+    # Обновляем запись: очищаем поле date_del и обновляем дату регистрации
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET date_del = NULL, date_add = ? WHERE tg_id = ?", (now, user_id))
+    conn.commit()
+    conn.close()
+    bot.send_message(call.message.chat.id, "Отлично! Пожалуйста, отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры.")
+    user_state[user_id] = "awaiting_photo"
+    bot.answer_callback_query(call.id)
+
+# Callback-обработчик для выбора опции "Нет" при возвращении в группу.
+@bot.callback_query_handler(func=lambda call: call.data == "return_no")
+def return_no_handler(call):
+    bot.send_message(call.message.chat.id, "Ну, заходи если чё...")
+    bot.answer_callback_query(call.id)
+
 # Callback-обработчик для подтверждения проживания.
 # Проверяет, зарегистрирован ли пользователь ранее, и запускает процедуру заполнения анкеты, если необходимо.
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_residence")
 def confirm_residence_handler(call):
     user_id = call.from_user.id
-    # Определяем chat_id, откуда пришёл пользователь
-    source_id = pending_users.get(user_id, {}).get('source_chat_id')
-    house_id = None
+    # Подключаемся к базе данных и проверяем наличие пользователя по tg_id
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    if source_id:
-        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_id,))
-        house = cursor.fetchone()
-        if house:
-            house_id = house[0]
-    # Если существует связка (tg_id, house) и поле date_del пустое – уведомляем, что пользователь уже зарегистрирован
-    if house_id:
-        cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
-        user_record = cursor.fetchone()
-        if user_record:
-            if not user_record[2] or user_record[2].strip() == "":
-                bot.send_message(call.message.chat.id, f"{user_record[1]}, мы тебя узнали и ты уже зарегистрирован в чате {source_id}. Если есть какие-то проблемы, свяжись с админом @proskurninra")
-                conn.close()
-                bot.answer_callback_query(call.id)
-                return
-            else:
-                # Если запись была удалена (date_del заполнено) – обновляем: очищаем date_del и обновляем дату регистрации
-                new_date = datetime.now().isoformat()
-                cursor.execute("UPDATE users SET date_del = NULL, date_add = ? WHERE id = ?", (new_date, user_record[0]))
-                conn.commit()
+    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ?", (user_id,))
+    user_record = cursor.fetchone()
+
+    if user_record:
+        # Если пользователь найден и активен (date_del пустое) – сообщаем, что он уже зарегистрирован
+        if not user_record[2] or user_record[2].strip() == "":
+            bot.send_message(call.message.chat.id, f"{user_record[1]}, мы тебя узнали и ты уже зарегистрирован.")
+            conn.close()
+            bot.answer_callback_query(call.id)
+            return
+        else:
+            # Если запись была удалена (date_del заполнено) – предлагаем вернуть пользователя в группу
+            keyboard = InlineKeyboardMarkup(row_width=2)
+            yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
+            no_button = InlineKeyboardButton("Нет", callback_data="return_no")
+            keyboard.add(yes_button, no_button)
+            bot.send_message(call.message.chat.id, f"Привет {user_record[1]}! Хотите вернуться в группу?", reply_markup=keyboard)
+            conn.close()
+            bot.answer_callback_query(call.id)
+            return
+
     conn.close()
+    # Если записи нет, начинаем процедуру заполнения анкеты
     bot.send_message(call.message.chat.id, "Ответьте на несколько вопросов, пожалуйста. Данные на серверах хранятся в зашифрованном виде в соответствии с требованиями регулятора.")
     ask_name(call.message.chat.id, user_id)
     bot.answer_callback_query(call.id)
@@ -368,6 +394,20 @@ def ask_name(chat_id, user_id):
 # Обработка введённого имени и сохранение в базе данных
 def process_name(message, user_id):
     name = message.text.strip()
+    # Проверка: имя должно быть не длиннее 50 символов
+    if len(name) > 50:
+        bot.send_message(message.chat.id, "Имя не должно превышать 50 символов. Пожалуйста, введите корректное имя.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_name(m, user_id))
+        return
+    # Фильтрация запрещённых слов (пример: 'бляд', 'хуй', 'пизд', 'сука')
+    banned_words = ['бляд', 'хуй', 'пизд', 'сука']
+    if any(bad in name.lower() for bad in banned_words):
+        bot.send_message(message.chat.id, "Имя содержит недопустимые слова. Пожалуйста, введите корректное имя.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_name(m, user_id))
+        return
+
+    # Если имеется справочник имён, здесь можно добавить проверку на корректность имени
+
     now = datetime.now().isoformat()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
@@ -384,7 +424,8 @@ def process_name(message, user_id):
                 house_id = cursor.lastrowid
             else:
                 house_id = house[0]
-        cursor.execute("INSERT INTO users (tg_id, name, house, date_add) VALUES (?, ?, ?, ?)", (user_id, name, house_id, now))
+        cursor.execute("INSERT INTO users (tg_id, name, house, date_add) VALUES (?, ?, ?, ?)",
+                       (user_id, name, house_id, now))
     else:
         cursor.execute("UPDATE users SET name = ?, date_add = ? WHERE tg_id = ?", (name, now, user_id))
     conn.commit()
@@ -399,6 +440,20 @@ def ask_surname(chat_id, user_id):
 # Обработка введённой фамилии и сохранение в базе данных
 def process_surname(message, user_id):
     surname = message.text.strip()
+    # Проверка: фамилия не должна превышать 50 символов
+    if len(surname) > 50:
+        bot.send_message(message.chat.id,
+                         "Фамилия не должна превышать 50 символов. Пожалуйста, введите корректную фамилию.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_surname(m, user_id))
+        return
+    # Фильтрация запрещённых слов
+    banned_words = ['бляд', 'хуй', 'пизд', 'сука']
+    if any(bad in surname.lower() for bad in banned_words):
+        bot.send_message(message.chat.id,
+                         "Фамилия содержит недопустимые слова. Пожалуйста, введите корректную фамилию.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_surname(m, user_id))
+        return
+
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET surname = ? WHERE tg_id = ?", (surname, user_id))
@@ -413,10 +468,20 @@ def ask_apartment(chat_id, user_id):
 
 # Обработка номера квартиры и сохранение в базе данных
 def process_apartment(message, user_id):
-    apartment = message.text.strip()
+    apartment_str = message.text.strip()
+    try:
+        apartment = int(apartment_str)
+        if apartment < 1 or apartment > 10000:
+            raise ValueError("Номер квартиры должен быть от 1 до 10000")
+    except ValueError as e:
+        bot.send_message(message.chat.id,
+                         f"Ошибка: {e}. Пожалуйста, введите номер квартиры в виде целого числа от 1 до 10000.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_apartment(m, user_id))
+        return
+
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET apartment = ? WHERE tg_id = ?", (apartment, user_id))
+    cursor.execute("UPDATE users SET apartment = ? WHERE tg_id = ?", (str(apartment), user_id))
     conn.commit()
     conn.close()
     ask_phone(message.chat.id, user_id)
@@ -429,9 +494,26 @@ def ask_phone(chat_id, user_id):
 # Обработка телефона и сохранение в базе данных
 def process_phone(message, user_id):
     phone = message.text.strip()
+    try:
+        # Attempt to parse the phone number; since it should include a '+' and country code, pass None as region
+        phone_number = phonenumbers.parse(phone, None)
+        if not phonenumbers.is_valid_number(phone_number):
+            raise ValueError("Номер не валидный")
+        # Format the number to E164 standard (e.g., +79002003030)
+        formatted_phone = format_number(phone_number, PhoneNumberFormat.E164)
+    except Exception as e:
+        error_message = (
+            f"Неверный формат телефона: {e}\n"
+            "Пожалуйста, введите номер в формате +79002003030.\n"
+            "Если проблемы сохраняются, свяжитесь с администратором: @proskurninra"
+        )
+        bot.send_message(message.chat.id, error_message)
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_phone(m, user_id))
+        return
+
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET phone = ? WHERE tg_id = ?", (phone, user_id))
+    cursor.execute("UPDATE users SET phone = ? WHERE tg_id = ?", (formatted_phone, user_id))
     conn.commit()
     conn.close()
     ask_car_count(message.chat.id, user_id)
@@ -445,8 +527,13 @@ def ask_car_count(chat_id, user_id):
 def process_car_count(message, user_id):
     try:
         count = int(message.text.strip())
-    except ValueError:
-        count = 0
+        if count < 0 or count > 10:
+            raise ValueError("Количество авто должно быть от 0 до 10")
+    except ValueError as e:
+        bot.send_message(message.chat.id, f"Ошибка: {e}. Пожалуйста, введите целое число от 0 до 10.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_car_count(m, user_id))
+        return
+
     if count == 0:
         bot.send_message(message.chat.id, "Понял, вы не автомобилист!")
         finalize_questionnaire(message.chat.id, user_id)
@@ -463,6 +550,15 @@ def ask_car_number(chat_id, user_id):
 # Обработка номера автомобиля и сохранение в базе данных
 def process_car_number(message, user_id):
     autonum = message.text.strip()
+    # Проверка: номер авто должен быть строкой от 3 до 15 символов
+    if len(autonum) < 3 or len(autonum) > 15:
+        bot.send_message(message.chat.id,
+                         "Номер авто должен содержать от 3 до 15 символов. Пожалуйста, введите корректный номер авто.")
+        bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_car_number(m, user_id))
+        return
+
+    # Здесь можно добавить проверку формата номера авто по справочнику (если есть)
+
     now = datetime.now().isoformat()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
