@@ -326,15 +326,22 @@ def left_member_handler(message):
     left_user = message.left_chat_member
     user_id = left_user.id
     now = datetime.now().isoformat()
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ?", (now, user_id))
-    cursor.execute("SELECT id FROM users WHERE tg_id = ?", (user_id,))
-    user_record = cursor.fetchone()
-    if user_record:
-        cursor.execute("UPDATE cars SET date_del = ? WHERE user = ? AND (date_del IS NULL OR date_del = '')", (now, user_record[0]))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('database.db')
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ?", (now, user_id))
+        cursor.execute("SELECT id FROM users WHERE tg_id = ?", (user_id,))
+        user_record = cursor.fetchone()
+        if user_record:
+            cursor.execute("UPDATE cars SET date_del = ? WHERE user = ? AND (date_del IS NULL OR date_del = '')", (now, user_record[0]))
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Ошибка при обработке выхода пользователя {user_id}: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception as e:
+            logging.error(f"Ошибка закрытия соединения с БД для пользователя {user_id}: {e}")
     if user_id in pending_users:
         del pending_users[user_id]
 
