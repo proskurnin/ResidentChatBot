@@ -108,6 +108,29 @@ def start_handler(message):
 @bot.callback_query_handler(func=lambda call: call.data == "start_introduction")
 def start_introduction_handler(call):
     user_id = call.from_user.id
+    # Проверяем наличие пользователя в базе данных
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ?", (user_id,))
+    user_record = cursor.fetchone()
+    conn.close()
+
+    if user_record:
+        # Если пользователь существует
+        if user_record[2] and user_record[2].strip() != "":
+            # Если запись помечена как удалённая (date_del заполнено), предлагаем вернуться в группу
+            keyboard = InlineKeyboardMarkup(row_width=2)
+            yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
+            no_button = InlineKeyboardButton("Нет", callback_data="return_no")
+            keyboard.add(yes_button, no_button)
+            bot.send_message(call.message.chat.id, f"Привет {user_record[1]}! Хотите вернуться в группу?", reply_markup=keyboard)
+        else:
+            # Если пользователь уже активен
+            bot.send_message(call.message.chat.id, f"{user_record[1]}, мы тебя узнали и ты уже зарегистрирован.")
+        bot.answer_callback_query(call.id)
+        return
+
+    # Если пользователь не найден в базе, продолжаем обычную процедуру знакомства
     user_state[user_id] = "awaiting_confirm"
     keyboard = InlineKeyboardMarkup(row_width=1)
     confirm_button = InlineKeyboardButton("Живу тут и готов подтвердить", callback_data="confirm_residence")
