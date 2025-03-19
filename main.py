@@ -95,7 +95,7 @@ source_chat_id = None  # Переменная для хранения исход
 def start_handler(message):
     if message.chat.type != 'private':
         return  # /start обрабатывается только в личном чате
-    user_first_name = message.from_user.first_name or "сосед"
+    user_first_name = f"@{message.from_user.first_name}" if message.from_user.first_name else "сосед"
     keyboard = InlineKeyboardMarkup(row_width=1)
     intro_button = InlineKeyboardButton("Познакомиться", callback_data="start_introduction")
     keyboard.add(intro_button)
@@ -123,10 +123,10 @@ def start_introduction_handler(call):
             yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
             no_button = InlineKeyboardButton("Нет", callback_data="return_no")
             keyboard.add(yes_button, no_button)
-            bot.send_message(call.message.chat.id, f"Привет {user_record[1]}! Хотите вернуться в группу?", reply_markup=keyboard)
+            bot.send_message(call.message.chat.id, f"Привет {('@' + user_record[1]) if user_record[1] and user_record[1] != 'None' else ''}! Хотите вернуться в группу?", reply_markup=keyboard)
         else:
             # Если пользователь уже активен
-            bot.send_message(call.message.chat.id, f"{user_record[1]}, мы тебя узнали и ты уже зарегистрирован.")
+            bot.send_message(call.message.chat.id, f"{('@' + user_record[1]) if user_record[1] and user_record[1] != 'None' else ''}, мы тебя узнали и ты уже зарегистрирован.")
         bot.answer_callback_query(call.id)
         return
 
@@ -197,7 +197,7 @@ def photo_handler(message):
 
             # Формируем сообщение для администратора с информацией о пользователе
             registration_info = (
-                f"Новый пользователь {message.from_user.first_name} (id: {user_id}) подал запрос на регистрацию в чате {group_title} (id: {source_chat_id}).\n"
+                f"Новый пользователь {('@' + message.from_user.first_name) if message.from_user.first_name and message.from_user.first_name != 'None' else message.from_user.first_name} (id: {user_id}) подал запрос на регистрацию в чате {('@' + group_title) if group_title and group_title != 'None' else group_title} (id: {source_chat_id}).\n"
                 f"Имя: {name}\n"
                 f"Фамилия: {surname}\n"
                 f"Квартира: {apartment}\n"
@@ -251,12 +251,12 @@ def allow_access(call):
         logging.info("Доступ открыт")
         bot.send_message(user_id, f"Доступ разрешён и вы можете воспользоваться всеми возможностями группы жильцов" +
             (f" (@{bot.get_chat(source_chat_id).username})" if bot.get_chat(source_chat_id).username else "") + ".")
-        bot.send_message(source_chat_id, f"Приветствуем пользователя {member.user.first_name}" +
-            (f" ({member.user.username})" if member.user.username else ". Он получает доступ ко всем возможностям группы. Поздравляем!"))
+        bot.send_message(source_chat_id, f"Приветствуем пользователя {('@' + member.user.first_name) if member.user.first_name and member.user.first_name != 'None' else member.user.first_name}" +
+                         (f" (@{member.user.username})" if member.user.username else ". Он получает доступ ко всем возможностями группы. Поздравляем!"))
         logging.info(f"call.id: {call.id}")
         bot.answer_callback_query(call.id, "Доступ предоставлен.")
-        bot.send_message(chat_id=ADMIN_ID, text=f"Доступ пользователю {member.user.first_name}" +
-            (f" (@{member.user.username})" if member.user.username else "") + " предоставлен.")
+        bot.send_message(chat_id=ADMIN_ID, text=f"Доступ пользователю {('@' + member.user.first_name) if member.user.first_name and member.user.first_name != 'None' else member.user.first_name}" +
+                              (f" (@{member.user.username})" if member.user.username else "") + " предоставлен.")
     else:
         bot.send_message(user_id, f"Группа не определена ({source_chat_id})!\nОшибка снятия ограничений для пользователя {user_id}!")
 
