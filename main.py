@@ -1,5 +1,4 @@
-"""
-ResidentChatBot main module
+"""ResidentChatBot main module
 ============================
 Этот модуль реализует Telegram-бота для управления процессом регистрации и идентификации жильцов.
 Бот обрабатывает команды, новые входы в чат, идентификацию посредством отправки фото, а также проводит опрос для регистрации.
@@ -30,6 +29,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Глобальные словари для отслеживания состояния пользователей и соответствия админа и пользователя
 admin_to_user_map = {}
 user_state = {}  # Состояния диалога в личном чате, ключ – tg_id
+admin_state = {}  # Состояние администратора для ввода причины запроса нового фото
 
 # Инициализация SQLite базы данных и создание необходимых таблиц, если они отсутствуют
 # Таблицы: groups, houses, users, cars
@@ -136,7 +136,6 @@ def choose_source_handler(call):
 
 # ======================================================
 # Дальше – обработчики команд и callback, изменения внесены в получении source_chat_id:
-# В следующих местах заменяем конструкцию получения source_chat_id
 
 # Обработчик команды /start в личном чате.
 @bot.message_handler(commands=['start'])
@@ -341,18 +340,19 @@ def request_photo(call):
         bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
         return
     logging.info(f"Запрос нового фото, source_chat_id: {source_chat_id}, пользователь: {user_id}")
-    admin_to_user_map[ADMIN_ID] = user_id
+    admin_state[ADMIN_ID] = {"user_id": user_id, "awaiting_reason": True}
     request_reason = f"Укажите причину запроса нового фото для пользователя {user_id}."
     bot.send_message(ADMIN_ID, request_reason)
     bot.answer_callback_query(call.id, "Введите причину запроса нового фото.")
 
-# Обработчик сообщений от администратора (ADMIN_ID).
+# Обработчик сообщений от администратора для ввода причины запроса нового фото.
 @bot.message_handler(func=lambda message: message.chat.id == ADMIN_ID and not (message.text and message.text.startswith("/")))
 def save_reason(message):
-    global group_id
-    if ADMIN_ID not in admin_to_user_map:
-        return  # Игнорируем сообщения, если нет активного запроса на фото
-    user_id = admin_to_user_map.get(ADMIN_ID)
+    global admin_state
+    # Обрабатываем сообщение только если администратор находится в режиме ввода причины
+    if ADMIN_ID not in admin_state or not admin_state[ADMIN_ID].get("awaiting_reason"):
+        return
+    user_id = admin_state[ADMIN_ID].get("user_id")
     if user_id is None:
         bot.send_message(ADMIN_ID, "Не найден user_id для ADMIN_ID.")
         return
@@ -361,7 +361,7 @@ def save_reason(message):
     pending_users[user_id]['reason'] = message.text
     bot.send_message(ADMIN_ID, "Причина сохранена.")
     reason = pending_users[user_id].get('reason', "причина не указана")
-    user_msg = (f"Администратор запрашивает новое фото по причине: {reason}\n"
+    user_msg = (f"Администратор запросил новое фото по причине: {reason}\n"
                 f"Пожалуйста, отправьте новое фото для подтверждения доступа.")
     bot.send_message(user_id, user_msg)
     user_state[user_id] = "awaiting_new_photo"
@@ -377,7 +377,8 @@ def save_reason(message):
         bot.send_message(src_chat, group_msg)
     else:
         logging.error("src_chat не определён, уведомление не отправлено.")
-    del admin_to_user_map[ADMIN_ID]
+    # Сбрасываем состояние администратора
+    admin_state.pop(ADMIN_ID, None)
 
 # Обработчик события выхода участника из чата.
 @bot.message_handler(content_types=['left_chat_member'])
