@@ -20,7 +20,8 @@ from phonenumbers import NumberParseException, PhoneNumberFormat, format_number
 load_dotenv()
 API_TOKEN = os.getenv("API_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-ADMIN_ID = os.getenv("ADMIN_ID")
+# ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 BOT_NAME = os.getenv("BOT_NAME")
 
 # Настройка логирования: вывод времени, уровня логирования и сообщения
@@ -87,10 +88,57 @@ pending_users = {}  # Словарь для отслеживания новых 
 group_id = None     # Переменная для хранения ID текущей группы
 source_chat_id = None  # Переменная для хранения исходного chat_id
 
-# -------------------- Обработчики команд и callback --------------------
+# ======================================================
+# Новая функция для выбора source_chat_id
+def get_source_chat_id(user_id):
+    # Если значение уже сохранено в pending_users, возвращаем его
+    if user_id in pending_users and pending_users[user_id].get('source_chat_id'):
+        return pending_users[user_id]['source_chat_id']
+    # Запрос к БД: получаем все дома (chat_id и house_name) пользователя
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    cursor.execute("""
+      SELECT h.chat_id, h.house_name FROM houses h
+      JOIN users u ON u.house = h.id
+      WHERE u.tg_id = ?
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    if len(rows) == 1:
+         # Если найден ровно один дом, сохраняем и возвращаем его chat_id
+         pending_users[user_id] = pending_users.get(user_id, {})
+         pending_users[user_id]['source_chat_id'] = rows[0][0]
+         return rows[0][0]
+    elif len(rows) > 1:
+         # Если найдено несколько домов, отправляем админу сообщение с выбором
+         keyboard = InlineKeyboardMarkup(row_width=1)
+         for chat, house_name in rows:
+              button_text = f"{house_name} ({chat})" if house_name else f"Чат {chat}"
+              button = InlineKeyboardButton(button_text, callback_data=f"choose_source:{user_id}:{chat}")
+              keyboard.add(button)
+         bot.send_message(ADMIN_ID, f"Выберите чат пользователя с id {user_id}", reply_markup=keyboard)
+         return None
+    else:
+         return None
+
+# Callback-обработчик для выбора source_chat_id администратором
+@bot.callback_query_handler(func=lambda call: call.data.startswith("choose_source:"))
+def choose_source_handler(call):
+    parts = call.data.split(":")
+    if len(parts) == 3:
+         user_id = int(parts[1])
+         chosen_chat_id = parts[2]
+         if user_id not in pending_users:
+              pending_users[user_id] = {}
+         pending_users[user_id]['source_chat_id'] = chosen_chat_id
+         bot.answer_callback_query(call.id, "Чат выбран.")
+         bot.send_message(ADMIN_ID, f"Для пользователя {user_id} выбран чат {chosen_chat_id}.")
+
+# ======================================================
+# Дальше – обработчики команд и callback, изменения внесены в получении source_chat_id:
+# В следующих местах заменяем конструкцию получения source_chat_id
 
 # Обработчик команды /start в личном чате.
-# Отправляет приветственное сообщение с кнопкой для начала процедуры знакомства.
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.chat.type != 'private':
@@ -103,12 +151,11 @@ def start_handler(message):
         f"Привет, {user_first_name}! Я бот чата жильцов. Закрытый чат жителей. Для участия нужно познакомиться и пройти идентификацию. Это займёт 2 минуты.",
         reply_markup=keyboard)
 
-# Callback-обработчик для кнопки \"Познакомиться\".
-# Устанавливает состояние пользователя на 'awaiting_confirm' и предлагает варианты подтверждения проживания.
+# Callback-обработчик для кнопки "Познакомиться".
 @bot.callback_query_handler(func=lambda call: call.data == "start_introduction")
 def start_introduction_handler(call):
     user_id = call.from_user.id
-    # Проверяем наличие пользователя в базе данных
+    user_first_name = f"@{call.from_user.first_name}" if call.from_user.first_name else "сосед"
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ?", (user_id,))
@@ -116,21 +163,17 @@ def start_introduction_handler(call):
     conn.close()
 
     if user_record:
-        # Если пользователь существует
         if user_record[2] and user_record[2].strip() != "":
-            # Если запись помечена как удалённая (date_del заполнено), предлагаем вернуться в группу
             keyboard = InlineKeyboardMarkup(row_width=2)
             yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
             no_button = InlineKeyboardButton("Нет", callback_data="return_no")
             keyboard.add(yes_button, no_button)
-            bot.send_message(call.message.chat.id, f"Привет {('@' + user_record[1]) if user_record[1] and user_record[1] != 'None' else ''}! Хотите вернуться в группу?", reply_markup=keyboard)
+            bot.send_message(call.message.chat.id, f"А мы вас знаем {user_first_name}! Хотите вернуться в группу?", reply_markup=keyboard)
         else:
-            # Если пользователь уже активен
             bot.send_message(call.message.chat.id, f"{('@' + user_record[1]) if user_record[1] and user_record[1] != 'None' else ''}, мы тебя узнали и ты уже зарегистрирован.")
         bot.answer_callback_query(call.id)
         return
 
-    # Если пользователь не найден в базе, продолжаем обычную процедуру знакомства
     user_state[user_id] = "awaiting_confirm"
     keyboard = InlineKeyboardMarkup(row_width=1)
     confirm_button = InlineKeyboardButton("Живу тут и готов подтвердить", callback_data="confirm_residence")
@@ -140,7 +183,6 @@ def start_introduction_handler(call):
     bot.answer_callback_query(call.id)
 
 # Обработчик новых участников в группе.
-# Ограничивает возможность отправки сообщений новым участникам и предлагает пройти процедуру знакомства.
 @bot.message_handler(content_types=['new_chat_members'])
 def new_member_handler(message):
     global group_id
@@ -161,18 +203,17 @@ def new_member_handler(message):
             access_button = InlineKeyboardButton("Получить доступ", url=f"https://t.me/{BOT_NAME}?start")
             keyboard.add(access_button)
             bot.send_message(group_id,
-                f"Добро пожаловать, {new_member.first_name}! Чтобы получить доступ к чату, пожалуйста пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
+                f"Добро пожаловать, @{new_member.first_name}! Чтобы получить доступ к чату, пожалуйста пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
                 reply_markup=keyboard)
+
 # Обработчик фото для идентификации.
-# Если бот ожидает фото, пересылает фото администратору с кнопками для действий (разрешить, отклонить, запросить новое фото)
 @bot.message_handler(content_types=['photo'])
 def photo_handler(message):
     user_id = message.from_user.id
-    if user_state.get(user_id) == "awaiting_photo":
+    if user_state.get(user_id) in ["awaiting_photo", "awaiting_new_photo"]:
         if user_id == bot.get_me().id:
             bot.send_message(message.from_user.id, "Фото получено. Ожидайте подтверждения.")
         else:
-            # Извлекаем информацию о пользователе из базы данных
             conn = sqlite3.connect('database.db')
             cursor = conn.cursor()
             cursor.execute("SELECT name, surname, apartment, phone FROM users WHERE tg_id = ?", (user_id,))
@@ -186,8 +227,12 @@ def photo_handler(message):
                 apartment = "не указана"
                 phone = "не указан"
 
-            # Получаем информацию о чате (группе) из pending_users или используем group_id
-            source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
+            # Получаем source_chat_id через новую функцию
+            source_chat_id = get_source_chat_id(user_id)
+            if source_chat_id is None:
+                bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
+                return
+
             try:
                 group = bot.get_chat(source_chat_id)
                 group_title = group.title if group.title else group.username
@@ -195,78 +240,68 @@ def photo_handler(message):
                 logging.error(f"Ошибка получения информации о чате: {e}")
                 group_title = "Неизвестный чат"
 
-            # Формируем сообщение для администратора с информацией о пользователе
             registration_info = (
-                f"Новый пользователь {('@' + message.from_user.first_name) if message.from_user.first_name and message.from_user.first_name != 'None' else message.from_user.first_name} (id: {user_id}) подал запрос на регистрацию в чате {('@' + group_title) if group_title and group_title != 'None' else group_title} (id: {source_chat_id}).\n"
+                f"Новый пользователь {('@' + message.from_user.first_name) if message.from_user.first_name and message.from_user.first_name != 'None' else message.from_user.first_name} (id: {user_id}) "
+                f"подал запрос на регистрацию в чате {('@' + group_title) if group_title and group_title != 'None' else group_title} (id: {source_chat_id}).\n"
                 f"Имя: {name}\n"
                 f"Фамилия: {surname}\n"
                 f"Квартира: {apartment}\n"
                 f"Телефон: {phone}"
             )
 
-            # Создаем клавиатуру с тремя кнопками
             keyboard = InlineKeyboardMarkup(row_width=1)
             allow_button = InlineKeyboardButton("Дать доступ", callback_data=f"allow:{user_id}")
             deny_button = InlineKeyboardButton("Отклонить доступ", callback_data=f"deny:{user_id}")
             request_photo_button = InlineKeyboardButton("Запросить новое фото", callback_data=f"request_photo:{user_id}")
             keyboard.add(allow_button, deny_button, request_photo_button)
 
-            # Отправляем сообщение с информацией и фото администратору
             bot.send_message(ADMIN_ID, registration_info)
             bot.send_photo(chat_id=ADMIN_ID, photo=message.photo[-1].file_id, reply_markup=keyboard)
-            bot.send_message(message.from_user.id, "Фото получено. Ожидайте подтверждения.")
+            bot.send_message(user_id, "Фото получено. Ожидайте подтверждения.")
+
         user_state[user_id] = "photo_sent"
-    else:
-        bot.send_message(message.chat.id, "Напоминаю, что я жду от вас фото для идентификации.")
 
 # Callback-обработчик для разрешения доступа пользователю.
-# Снимает ограничения с пользователя, обновляет статус и отправляет уведомления пользователю и администратору.
 @bot.callback_query_handler(func=lambda call: call.data.startswith("allow:"))
 def allow_access(call):
-    global group_id, source_chat_id
+    global group_id
     user_id = int(call.data.split(":")[1])
-    source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
-    logging.info(f"Перед обработкой кнопки 'Дать доступ' текущий source_chat_id: {source_chat_id}, текущий пользователь user_id: {user_id} и текущий group_id: {group_id}")
-    if source_chat_id:
-        member = None
-        try:
-            member = bot.get_chat_member(source_chat_id, user_id)
-            if member.status not in ['left', 'kicked']:
-                logging.info(f"Текущий пользователь {user_id} в исходном чате {source_chat_id} найден!")
-        except Exception as e:
-            logging.error(f"Ошибка проверки участника {user_id} в чате {source_chat_id}: {e}")
-        if source_chat_id:
-            try:
-                bot.restrict_chat_member(source_chat_id, user_id, can_send_messages=True)
-            except telebot.apihelper.ApiTelegramException as e:
-                logging.error(f"Ошибка снятия ограничений для пользователя {user_id} в чате {source_chat_id}: {e}")
-        else:
-            logging.error(f"Пользователь {user_id} не найден ни в одном известном чате.")
-        if user_id not in pending_users:
-            pending_users[user_id] = {
-                'status': 'awaiting_photo',
-                'join_time': datetime.now()
-            }
-        pending_users[user_id]['status'] = 'approved'
-        logging.info("Доступ открыт")
-        bot.send_message(user_id, f"Доступ разрешён и вы можете воспользоваться всеми возможностями группы жильцов" +
-            (f" (@{bot.get_chat(source_chat_id).username})" if bot.get_chat(source_chat_id).username else "") + ".")
-        bot.send_message(source_chat_id, f"Приветствуем пользователя {('@' + member.user.first_name) if member.user.first_name and member.user.first_name != 'None' else member.user.first_name}" +
-                         (f" (@{member.user.username})" if member.user.username else ". Он получает доступ ко всем возможностями группы. Поздравляем!"))
-        logging.info(f"call.id: {call.id}")
-        bot.answer_callback_query(call.id, "Доступ предоставлен.")
-        bot.send_message(chat_id=ADMIN_ID, text=f"Доступ пользователю {('@' + member.user.first_name) if member.user.first_name and member.user.first_name != 'None' else member.user.first_name}" +
-                              (f" (@{member.user.username})" if member.user.username else "") + " предоставлен.")
-    else:
-        bot.send_message(user_id, f"Группа не определена ({source_chat_id})!\nОшибка снятия ограничений для пользователя {user_id}!")
+    source_chat_id = get_source_chat_id(user_id)
+    if source_chat_id is None:
+        bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
+        return
+    logging.info(f"Перед обработкой кнопки 'Дать доступ' текущий source_chat_id: {source_chat_id}, пользователь: {user_id}, группа: {group_id}")
+    member = None
+    try:
+        member = bot.get_chat_member(source_chat_id, user_id)
+        if member.status not in ['left', 'kicked']:
+            logging.info(f"Пользователь {user_id} найден в чате {source_chat_id}")
+    except Exception as e:
+        logging.error(f"Ошибка проверки участника {user_id} в чате {source_chat_id}: {e}")
+    try:
+        bot.restrict_chat_member(source_chat_id, user_id, can_send_messages=True)
+    except telebot.apihelper.ApiTelegramException as e:
+        logging.error(f"Ошибка снятия ограничений для {user_id} в чате {source_chat_id}: {e}")
+    if user_id not in pending_users:
+        pending_users[user_id] = {'status': 'awaiting_photo', 'join_time': datetime.now()}
+    pending_users[user_id]['status'] = 'approved'
+    logging.info("Доступ открыт")
+    bot.send_message(user_id, f"Доступ разрешён и вы можете пользоваться чатом жильцов" +
+                     (f" (@{bot.get_chat(source_chat_id).username})" if bot.get_chat(source_chat_id).username else "") + ".")
+    bot.send_message(source_chat_id, f"Приветствуем пользователя {('@' + member.user.first_name) if member.user.first_name else member.user.first_name}" +
+                     (f" (@{member.user.username})" if member.user.username else ". Он получил доступ к чату."))
+    bot.answer_callback_query(call.id, "Доступ предоставлен.")
+    bot.send_message(ADMIN_ID, f"Доступ пользователю {('@' + member.user.first_name) if member.user.first_name else member.user.first_name} предоставлен.")
 
-# Callback-обработчик для отклонения доступа пользователю.
-# Удаляет пользователя из чата, обновляет статус и отправляет уведомления.
+# Callback-обработчик для отклонения доступа.
 @bot.callback_query_handler(func=lambda call: call.data.startswith("deny:"))
 def deny_access(call):
-    global group_id, source_chat_id
+    global group_id
     user_id = int(call.data.split(":")[1])
-    source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
+    source_chat_id = get_source_chat_id(user_id)
+    if source_chat_id is None:
+        bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
+        return
     now = datetime.now().isoformat()
     try:
         conn = sqlite3.connect('database.db')
@@ -275,79 +310,73 @@ def deny_access(call):
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Ошибка обновления записи пользователя {user_id} при отклонении доступа: {e}")
-    logging.info(f"Перед обработкой кнопки 'Отклонить доступ' текущий source_chat_id: {source_chat_id}, текущий пользователь user_id: {user_id} и текущий group_id: {group_id}")
+        logging.error(f"Ошибка обновления записи для {user_id} при отклонении: {e}")
     member = None
     try:
         member = bot.get_chat_member(source_chat_id, user_id)
-        if member.status not in ['left', 'kicked']:
-            logging.info(f"Текущий пользователь {user_id} в исходном чате {source_chat_id} найден!")
     except Exception as e:
         logging.error(f"Ошибка проверки участника {user_id} в чате {source_chat_id}: {e}")
-    if source_chat_id:
-        try:
-            bot.kick_chat_member(source_chat_id, user_id)
-            bot.unban_chat_member(source_chat_id, user_id)
-        except telebot.apihelper.ApiTelegramException as e:
-            logging.error(f"Ошибка отклонения запроса и удаления пользователя {user_id} из чата {source_chat_id}: {e}")
+    try:
+        bot.kick_chat_member(source_chat_id, user_id)
+        bot.unban_chat_member(source_chat_id, user_id)
+    except telebot.apihelper.ApiTelegramException as e:
+        logging.error(f"Ошибка удаления {user_id} из чата {source_chat_id}: {e}")
+    bot.send_message(user_id, "Ваш запрос отклонён. Фото не соответствует требованиям.")
+    if member is not None:
+        group_msg = f"Пользователю {member.user.first_name}" + (f" ({member.user.username})" if member.user.username else " доступ не предоставлен, и он удалён.")
     else:
-        logging.error(f"Пользователь {user_id} не найден ни в одном известном чате.")
-    logging.info("Доступ ОТКЛОНЁН и пользователь УДАЛЁН")
-    bot.send_message(user_id, f"Ваш запрос отклонён, потому что вы прислали не релевантное фото. Напоминаю, что следовало прислать фото вида из окна вашей квартиры, которое вы сделали сегодня.")
-    bot.send_message(source_chat_id, f"Пользователю {member.user.first_name}" +
-        (f" ({member.user.username})" if member.user.username else " доступ не предоставлен и он удалён за предоставление не релевантной фотографии."))
-    logging.info(f"call.id: {call.id}")
+        group_msg = "Пользователь не найден, уведомление не отправлено."
+    bot.send_message(source_chat_id, group_msg)
     bot.answer_callback_query(call.id, "Доступ отклонён!")
-    bot.send_message(chat_id=ADMIN_ID, text=f"Доступ пользователю {member.user.first_name}" +
-        (f" (@{member.user.username})" if member.user.username else "") + f" ОТКЛОНЁН и он УДАЛЁН из группы ({source_chat_id}).")
+    admin_msg = f"Доступ пользователю {member.user.first_name if member is not None else user_id} отклонён и он удалён из чата ({source_chat_id})."
+    bot.send_message(ADMIN_ID, admin_msg)
 
 # Callback-обработчик для запроса нового фото.
-# Отправляет администратору сообщение с просьбой указать причину запроса нового фото.
 @bot.callback_query_handler(func=lambda call: call.data.startswith("request_photo:"))
 def request_photo(call):
-    global group_id, source_chat_id
+    global group_id
     user_id = int(call.data.split(":")[1])
-    source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
-    logging.info(f"Перед обработкой кнопки 'Запросить новое фото' текущий source_chat_id: {source_chat_id}, текущий пользователь user_id: {user_id} и текущий group_id: {group_id}")
-
+    source_chat_id = get_source_chat_id(user_id)
+    if source_chat_id is None:
+        bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
+        return
+    logging.info(f"Запрос нового фото, source_chat_id: {source_chat_id}, пользователь: {user_id}")
     admin_to_user_map[ADMIN_ID] = user_id
-    request_reason = f"Пожалуйста укажите причину для запроса нового фото от @{user_id}."
+    request_reason = f"Укажите причину запроса нового фото для пользователя {user_id}."
     bot.send_message(ADMIN_ID, request_reason)
     bot.answer_callback_query(call.id, "Введите причину запроса нового фото.")
 
 # Обработчик сообщений от администратора (ADMIN_ID).
-# Сохраняет причину запроса нового фото, уведомляет администратора и пересылает запрос пользователю.
 @bot.message_handler(func=lambda message: message.chat.id == ADMIN_ID)
 def save_reason(message):
     global group_id
     user_id = admin_to_user_map.get(ADMIN_ID)
-    if user_id is not None:
-        pending_users[user_id]['reason'] = message.text
-        bot.send_message(ADMIN_ID,"Причина сохранена.")
-        reason = pending_users[user_id].get('reason', "причина не указана")
-
-        # Отправляем сообщение пользователю в личные сообщения с запросом нового фото
-        bot.send_message(user_id,f"Администратор запрашивает новое фото по следующей причине: {reason}\nПожалуйста отправьте новое фото для повторного согласования.")
-
-        # Устанавливаем состояние пользователя как ожидающее новое фото
-        user_state[user_id] = "awaiting_new_photo"
-
-        # Получаем имя пользователя для уведомления в групповом чате
+    if user_id is None:
+        bot.send_message(ADMIN_ID, "Не найден user_id для ADMIN_ID.")
+        return
+    if user_id not in pending_users:
+        pending_users[user_id] = {}
+    pending_users[user_id]['reason'] = message.text
+    bot.send_message(ADMIN_ID, "Причина сохранена.")
+    reason = pending_users[user_id].get('reason', "причина не указана")
+    user_msg = (f"Администратор запрашивает новое фото по причине: {reason}\n"
+                f"Пожалуйста, отправьте новое фото для подтверждения доступа.")
+    bot.send_message(user_id, user_msg)
+    user_state[user_id] = "awaiting_new_photo"
+    src_chat = get_source_chat_id(user_id)
+    if src_chat is not None:
         try:
-            member = bot.get_chat_member(pending_users[user_id]['source_chat_id'], user_id)
+            member = bot.get_chat_member(src_chat, user_id)
             user_first_name = member.user.first_name if member.user.first_name else str(user_id)
         except Exception as e:
-            logging.error(f"Ошибка получения информации о пользователе {user_id}: {e}")
+            logging.error(f"Ошибка получения информации для {user_id}: {e}")
             user_first_name = str(user_id)
-
-        # Отправляем уведомление в групповой чат
-        bot.send_message(pending_users[user_id]['source_chat_id'],
-                         f"@{user_first_name}, бот запросил у вас новое фото. В личных сообщениях от чатбота у вас есть запрос на отправку фото для предоставления доступа.")
+        group_msg = (f"@{user_first_name}, администратор запросил новое фото. Проверьте личные сообщения.")
+        bot.send_message(src_chat, group_msg)
     else:
-        bot.send_message(ADMIN_ID, "Не найден user_id для ADMIN_ID.")
+        logging.error("src_chat не определён, уведомление не отправлено.")
 
 # Обработчик события выхода участника из чата.
-# Обновляет записи в базе данных, помечая пользователя и его транспорт как удалённые.
 @bot.message_handler(content_types=['left_chat_member'])
 def left_member_handler(message):
     left_user = message.left_chat_member
@@ -368,22 +397,23 @@ def left_member_handler(message):
         try:
             conn.close()
         except Exception as e:
-            logging.error(f"Ошибка закрытия соединения с БД для пользователя {user_id}: {e}")
+            logging.error(f"Ошибка закрытия БД для {user_id}: {e}")
     if user_id in pending_users:
         del pending_users[user_id]
 
 # Callback-обработчик для идентификации.
-# Отправляет клавиатуру для подтверждения проживания и логирует информацию о группе.
 @bot.callback_query_handler(func=lambda call: call.data == 'identification')
 def identification_handler(call):
-    global group_id, source_chat_id
+    global group_id
     if call.message.chat is None:
-        logging.error("call.message.chat is None, cannot process identification.")
+        logging.error("call.message.chat is None, невозможно обработать идентификацию.")
         return
     user_id = call.from_user.id
-    if user_id in pending_users:
-        source_chat_id = pending_users[user_id]['source_chat_id']
-    logging.info(f"Обработчик вызван для группы {source_chat_id} (ID: {call.message.chat.id})")
+    source_chat_id = get_source_chat_id(user_id)
+    if source_chat_id is None:
+        bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
+        return
+    logging.info(f"Идентификация для чата {source_chat_id} (ID: {call.message.chat.id})")
     keyboard = InlineKeyboardMarkup(row_width=1)
     confirm_button = InlineKeyboardButton("Живу тут и готов подтвердить", callback_data="confirm_residence")
     not_residing_button = InlineKeyboardButton("Не живу тут", callback_data="not_residing")
@@ -397,12 +427,11 @@ def identification_handler(call):
     conn.close()
 
 # Callback-обработчик для пользователей, которые подтверждают, что не являются жильцами.
-# Информирует пользователя и удаляет его из чата.
 @bot.callback_query_handler(func=lambda call: call.data == "not_residing")
 def not_residing_handler(call):
     user_id = call.from_user.id
     bot.send_message(call.message.chat.id, "Чат предназначен только для жильцов.")
-    source_id = pending_users.get(user_id, {}).get('source_chat_id')
+    source_id = get_source_chat_id(user_id)
     now = datetime.now().isoformat()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
@@ -418,7 +447,7 @@ def not_residing_handler(call):
             bot.kick_chat_member(source_id, user_id)
             bot.unban_chat_member(source_id, user_id)
         except telebot.apihelper.ApiTelegramException as e:
-            logging.error(f"Ошибка удаления пользователя {user_id} из чата {source_id}: {e}")
+            logging.error(f"Ошибка удаления {user_id} из чата {source_id}: {e}")
     bot.answer_callback_query(call.id)
 
 # Callback-обработчик для выбора опции "Да" при возвращении в группу.
@@ -426,7 +455,6 @@ def not_residing_handler(call):
 def return_yes_handler(call):
     user_id = call.from_user.id
     now = datetime.now().isoformat()
-    # Обновляем запись: очищаем поле date_del и обновляем дату регистрации
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET date_del = NULL, date_add = ? WHERE tg_id = ?", (now, user_id))
@@ -443,25 +471,20 @@ def return_no_handler(call):
     bot.answer_callback_query(call.id)
 
 # Callback-обработчик для подтверждения проживания.
-# Проверяет, зарегистрирован ли пользователь ранее, и запускает процедуру заполнения анкеты, если необходимо.
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_residence")
 def confirm_residence_handler(call):
     user_id = call.from_user.id
-    # Подключаемся к базе данных и проверяем наличие пользователя по tg_id
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ?", (user_id,))
     user_record = cursor.fetchone()
-
     if user_record:
-        # Если пользователь найден и активен (date_del пустое) – сообщаем, что он уже зарегистрирован
         if not user_record[2] or user_record[2].strip() == "":
             bot.send_message(call.message.chat.id, f"{user_record[1]}, мы тебя узнали и ты уже зарегистрирован.")
             conn.close()
             bot.answer_callback_query(call.id)
             return
         else:
-            # Если запись была удалена (date_del заполнено) – предлагаем вернуть пользователя в группу
             keyboard = InlineKeyboardMarkup(row_width=2)
             yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
             no_button = InlineKeyboardButton("Нет", callback_data="return_no")
@@ -470,37 +493,27 @@ def confirm_residence_handler(call):
             conn.close()
             bot.answer_callback_query(call.id)
             return
-
     conn.close()
-    # Если записи нет, начинаем процедуру заполнения анкеты
-    bot.send_message(call.message.chat.id, "Ответьте на несколько вопросов, пожалуйста. Данные на серверах хранятся в зашифрованном виде в соответствии с требованиями регулятора.")
+    bot.send_message(call.message.chat.id, "Ответьте на несколько вопросов, пожалуйста. Данные на серверах хранятся в зашифрованном виде.")
     ask_name(call.message.chat.id, user_id)
     bot.answer_callback_query(call.id)
 
-# -------------------- Функции для проведения опроса (анкеты) --------------------
-
-# Запрос имени пользователя
+# Функции для проведения опроса (анкеты)
 def ask_name(chat_id, user_id):
     bot.send_message(chat_id, "Ваше имя:")
     bot.register_next_step_handler_by_chat_id(chat_id, lambda message: process_name(message, user_id))
 
-# Обработка введённого имени и сохранение в базе данных
 def process_name(message, user_id):
     name = message.text.strip()
-    # Проверка: имя должно быть не длиннее 50 символов
     if len(name) > 50:
-        bot.send_message(message.chat.id, "Имя не должно превышать 50 символов. Пожалуйста введите корректное имя.")
+        bot.send_message(message.chat.id, "Имя не должно превышать 50 символов. Введите корректное имя.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_name(m, user_id))
         return
-    # Фильтрация запрещённых слов (пример: 'бляд', 'хуй', 'пизд', 'сука')
     banned_words = ['бляд', 'хуй', 'пизд', 'сука']
     if any(bad in name.lower() for bad in banned_words):
-        bot.send_message(message.chat.id, "Имя содержит недопустимые слова. Пожалуйста введите корректное имя.")
+        bot.send_message(message.chat.id, "Имя содержит недопустимые слова. Введите корректное имя.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_name(m, user_id))
         return
-
-    # Если имеется справочник имён, здесь можно добавить проверку на корректность имени
-
     now = datetime.now().isoformat()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
@@ -517,36 +530,28 @@ def process_name(message, user_id):
                 house_id = cursor.lastrowid
             else:
                 house_id = house[0]
-        cursor.execute("INSERT INTO users (tg_id, name, house, date_add) VALUES (?, ?, ?, ?)",
-                       (user_id, name, house_id, now))
+        cursor.execute("INSERT INTO users (tg_id, name, house, date_add) VALUES (?, ?, ?, ?)", (user_id, name, house_id, now))
     else:
         cursor.execute("UPDATE users SET name = ?, date_add = ? WHERE tg_id = ?", (name, now, user_id))
     conn.commit()
     conn.close()
     ask_surname(message.chat.id, user_id)
 
-# Запрос фамилии пользователя
 def ask_surname(chat_id, user_id):
     bot.send_message(chat_id, "Фамилия:")
     bot.register_next_step_handler_by_chat_id(chat_id, lambda message: process_surname(message, user_id))
 
-# Обработка введённой фамилии и сохранение в базе данных
 def process_surname(message, user_id):
     surname = message.text.strip()
-    # Проверка: фамилия не должна превышать 50 символов
     if len(surname) > 50:
-        bot.send_message(message.chat.id,
-                         "Фамилия не должна превышать 50 символов. Пожалуйста введите корректную фамилию.")
+        bot.send_message(message.chat.id, "Фамилия не должна превышать 50 символов. Введите корректную фамилию.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_surname(m, user_id))
         return
-    # Фильтрация запрещённых слов
     banned_words = ['бляд', 'хуй', 'пизд', 'сука']
     if any(bad in surname.lower() for bad in banned_words):
-        bot.send_message(message.chat.id,
-                         "Фамилия содержит недопустимые слова. Пожалуйста введите корректную фамилию.")
+        bot.send_message(message.chat.id, "Фамилия содержит недопустимые слова. Введите корректную фамилию.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_surname(m, user_id))
         return
-
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET surname = ? WHERE tg_id = ?", (surname, user_id))
@@ -554,12 +559,10 @@ def process_surname(message, user_id):
     conn.close()
     ask_apartment(message.chat.id, user_id)
 
-# Запрос номера квартиры
 def ask_apartment(chat_id, user_id):
     bot.send_message(chat_id, "№ квартиры:")
     bot.register_next_step_handler_by_chat_id(chat_id, lambda message: process_apartment(message, user_id))
 
-# Обработка номера квартиры и сохранение в базе данных
 def process_apartment(message, user_id):
     apartment_str = message.text.strip()
     try:
@@ -567,11 +570,9 @@ def process_apartment(message, user_id):
         if apartment < 1 or apartment > 10000:
             raise ValueError("Номер квартиры должен быть от 1 до 10000")
     except ValueError as e:
-        bot.send_message(message.chat.id,
-                         f"Ошибка: {e}. Пожалуйста введите номер квартиры в виде целого числа от 1 до 10000.")
+        bot.send_message(message.chat.id, f"Ошибка: {e}. Введите номер квартиры от 1 до 10000.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_apartment(m, user_id))
         return
-
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET apartment = ? WHERE tg_id = ?", (str(apartment), user_id))
@@ -579,29 +580,21 @@ def process_apartment(message, user_id):
     conn.close()
     ask_phone(message.chat.id, user_id)
 
-# Запрос телефона пользователя
 def ask_phone(chat_id, user_id):
     bot.send_message(chat_id, "Телефон в формате +79002003030:")
     bot.register_next_step_handler_by_chat_id(chat_id, lambda message: process_phone(message, user_id))
 
-# Обработка телефона и сохранение в базе данных
 def process_phone(message, user_id):
     phone = message.text.strip()
     try:
-        # Attempt to parse the phone number; since it should include a '+' and country code, pass None as region
         phone_number = phonenumbers.parse(phone, None)
         if not phonenumbers.is_valid_number(phone_number):
             raise ValueError("Номер не валидный")
-        # Format the number to E164 standard (e.g., +79002003030)
         formatted_phone = format_number(phone_number, PhoneNumberFormat.E164)
     except Exception as e:
-        error_message = (
-            f"Неверный формат телефона: {e}. Пожалуйста введите номер в формате +79002003030. Если проблемы сохраняются, свяжитесь с администратором: @proskurninra"
-        )
-        bot.send_message(message.chat.id, error_message)
+        bot.send_message(message.chat.id, f"Неверный формат телефона: {e}. Введите номер в формате +79002003030.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_phone(m, user_id))
         return
-
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET phone = ? WHERE tg_id = ?", (formatted_phone, user_id))
@@ -609,47 +602,37 @@ def process_phone(message, user_id):
     conn.close()
     ask_car_count(message.chat.id, user_id)
 
-# Запрос количества автомобилей для помощи автомобилистам
 def ask_car_count(chat_id, user_id):
-    bot.send_message(chat_id, "Для помощи автомобилистам укажите сколько у вас автомобилей. Если машин нет, то укажите 0:")
+    bot.send_message(chat_id, "Укажите, сколько у вас автомобилей (0 если нет):")
     bot.register_next_step_handler_by_chat_id(chat_id, lambda message: process_car_count(message, user_id))
 
-# Обработка количества автомобилей и переход к вводу номера автомобиля, если требуется
 def process_car_count(message, user_id):
     try:
         count = int(message.text.strip())
         if count < 0 or count > 10:
             raise ValueError("Количество авто должно быть от 0 до 10")
     except ValueError as e:
-        bot.send_message(message.chat.id, f"Ошибка: {e}. Пожалуйста введите целое число от 0 до 10.")
+        bot.send_message(message.chat.id, f"Ошибка: {e}. Введите число от 0 до 10.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_car_count(m, user_id))
         return
-
     if count == 0:
-        bot.send_message(message.chat.id, "Понял, вы не автомобилист!")
+        bot.send_message(message.chat.id, "Понятно, вы не автомобилист!")
         finalize_questionnaire(message.chat.id, user_id)
     else:
         user_state[user_id] = {"car_count": count, "current_car": 1}
         ask_car_number(message.chat.id, user_id)
 
-# Запрос номера автомобиля
 def ask_car_number(chat_id, user_id):
     current = user_state[user_id]["current_car"]
-    bot.send_message(chat_id, f"Номер авто {current} в формате н001нн797 (буквы русские):")
+    bot.send_message(chat_id, f"Номер авто {current} (например, н001нн797):")
     bot.register_next_step_handler_by_chat_id(chat_id, lambda message: process_car_number(message, user_id))
 
-# Обработка номера автомобиля и сохранение в базе данных
 def process_car_number(message, user_id):
     autonum = message.text.strip()
-    # Проверка: номер авто должен быть строкой от 3 до 15 символов
     if len(autonum) < 3 or len(autonum) > 15:
-        bot.send_message(message.chat.id,
-                         "Номер авто должен содержать от 3 до 15 символов. Пожалуйста введите корректный номер авто.")
+        bot.send_message(message.chat.id, "Номер авто должен содержать от 3 до 15 символов. Введите корректный номер.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_car_number(m, user_id))
         return
-
-    # Здесь можно добавить проверку формата номера авто по справочнику (если есть)
-
     now = datetime.now().isoformat()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
@@ -665,13 +648,11 @@ def process_car_number(message, user_id):
     else:
         finalize_questionnaire(message.chat.id, user_id)
 
-# Завершение анкеты и перевод пользователя в состояние ожидания фото для подтверждения актуальности
 def finalize_questionnaire(chat_id, user_id):
-    bot.send_message(chat_id, "Спасибо, анкета заполнена. Теперь, пожалуйста отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры. Фотография будет сверяться с фактической обстановкой модераторами. Если Вы хотите воспользоваться подтверждением по документам, сообщите это администратору @proskurninra личным сообщением.")
+    bot.send_message(chat_id, "Анкета заполнена. Теперь отправьте актуальное фото дворовой территории из окна вашей квартиры.")
     user_state[user_id] = "awaiting_photo"
 
 # Обработчик команды /db для администратора.
-# Выводит содержимое таблиц базы данных (houses, users, cars). Доступ разрешён только администратору.
 @bot.message_handler(commands=['db'])
 def db_handler(message):
     if message.from_user.id != int(ADMIN_ID):
@@ -679,18 +660,15 @@ def db_handler(message):
         return
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    output = "Таблица houses\n"
-    output += " id | house_name | chat_id | house_city | house_address | date_add | date_del \n"
+    output = "Таблица houses\n id | house_name | chat_id | house_city | house_address | date_add | date_del \n"
     cursor.execute("SELECT * FROM houses")
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
-    output += "\nТаблица users\n"
-    output += " id | tg_id | name | surname | house | apartment | phone | date_add | date_del \n"
+    output += "\nТаблица users\n id | tg_id | name | surname | house | apartment | phone | date_add | date_del \n"
     cursor.execute("SELECT * FROM users")
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
-    output += "\nТаблица cars\n"
-    output += " id | user | autonum | date_add | date_del \n"
+    output += "\nТаблица cars\n id | user | autonum | date_add | date_del \n"
     cursor.execute("SELECT * FROM cars")
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
@@ -706,7 +684,7 @@ def check_handler(message):
     if len(parts) >= 2:
         group_id_check = parts[1]
     else:
-        bot.send_message(message.chat.id, "Пожалуйста укажите ID группы, например: /check -123456789")
+        bot.send_message(message.chat.id, "Укажите ID группы, например: /check -123456789")
         return
     try:
         conn = sqlite3.connect('database.db')
@@ -726,13 +704,12 @@ def check_handler(message):
                 try:
                     bot.kick_chat_member(group_id_check, tg_id)
                     bot.unban_chat_member(group_id_check, tg_id)
-                    bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста заполните данные о себе, чтобы получить доступ к чату.")
+                    bot.send_message(tg_id, "Вы не зарегистрированы. Заполните данные для доступа к чату.")
                 except Exception as e:
-                    logging.error(f"Ошибка блокировки пользователя {tg_id} в чате {group_id_check}: {e}")
+                    logging.error(f"Ошибка блокировки {tg_id} в чате {group_id_check}: {e}")
         bot.send_message(message.chat.id, f"Проверка завершена. Заблокировано {len(not_registered)} пользователей: {not_registered}")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
-
 
 @bot.message_handler(commands=['checkall'])
 def checkall_handler(message):
@@ -765,9 +742,9 @@ def checkall_handler(message):
                     try:
                         bot.kick_chat_member(grp_id, tg_id)
                         bot.unban_chat_member(grp_id, tg_id)
-                        bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста заполните данные о себе, чтобы получить доступ к чату.")
+                        bot.send_message(tg_id, "Вы не зарегистрированы. Заполните данные для доступа к чату.")
                     except Exception as e:
-                        logging.error(f"Ошибка блокировки пользователя {tg_id} в чате {grp_id}: {e}")
+                        logging.error(f"Ошибка блокировки {tg_id} в чате {grp_id}: {e}")
             total_blocked += len(not_registered)
             details += f"Чат {grp_id}: заблокировано {len(not_registered)} пользователей\n"
         bot.send_message(message.chat.id, f"Проверка завершена. Всего заблокировано {total_blocked} пользователей.\n{details}")
@@ -775,5 +752,4 @@ def checkall_handler(message):
         bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
 
 # -------------------- Запуск бота --------------------
-# Запуск цикла опроса для получения обновлений от Telegram
 bot.polling()
