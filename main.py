@@ -309,9 +309,11 @@ def request_photo(call):
     user_id = int(call.data.split(":")[1])
     source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
     logging.info(f"Перед обработкой кнопки 'Запросить новое фото' текущий source_chat_id: {source_chat_id}, текущий пользователь user_id: {user_id} и текущий group_id: {group_id}")
+
     admin_to_user_map[ADMIN_ID] = user_id
     request_reason = f"Пожалуйста, укажите причину для запроса нового фото от @{user_id}."
     bot.send_message(ADMIN_ID, request_reason)
+    bot.answer_callback_query(call.id, "Введите причину запроса нового фото.")
 
 # Обработчик сообщений от администратора (ADMIN_ID).
 # Сохраняет причину запроса нового фото, уведомляет администратора и пересылает запрос пользователю.
@@ -321,11 +323,11 @@ def save_reason(message):
     user_id = admin_to_user_map.get(ADMIN_ID)
     if user_id is not None:
         pending_users[user_id]['reason'] = message.text
-        bot.send_message(ADMIN_ID, "Причина сохранена.")
+        bot.send_message(ADMIN_ID,"Причина сохранена.")
         reason = pending_users[user_id].get('reason', "причина не указана")
 
         # Отправляем сообщение пользователю в личные сообщения с запросом нового фото
-        bot.send_message(user_id, f"Администратор запрашивает новое фото по следующей причине: {reason}")
+        bot.send_message(user_id,f"Администратор запрашивает новое фото по следующей причине: {reason}\nПожалуйста, отправьте новое фото для повторного согласования.")
 
         # Устанавливаем состояние пользователя как ожидающее новое фото
         user_state[user_id] = "awaiting_new_photo"
