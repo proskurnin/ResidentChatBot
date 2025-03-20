@@ -136,7 +136,7 @@ def start_introduction_handler(call):
     confirm_button = InlineKeyboardButton("Живу тут и готов подтвердить", callback_data="confirm_residence")
     not_residing_button = InlineKeyboardButton("Не живу тут", callback_data="not_residing")
     keyboard.add(confirm_button, not_residing_button)
-    bot.send_message(call.message.chat.id, "Пожалуйста, подтвердите ваше проживание:", reply_markup=keyboard)
+    bot.send_message(call.message.chat.id, "Пожалуйста подтвердите ваше проживание:", reply_markup=keyboard)
     bot.answer_callback_query(call.id)
 
 # Обработчик новых участников в группе.
@@ -161,7 +161,7 @@ def new_member_handler(message):
             access_button = InlineKeyboardButton("Получить доступ", url=f"https://t.me/{BOT_NAME}?start")
             keyboard.add(access_button)
             bot.send_message(group_id,
-                f"Добро пожаловать, {new_member.first_name}! Чтобы получить доступ к чату, пожалуйста, пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
+                f"Добро пожаловать, {new_member.first_name}! Чтобы получить доступ к чату, пожалуйста пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
                 reply_markup=keyboard)
 # Обработчик фото для идентификации.
 # Если бот ожидает фото, пересылает фото администратору с кнопками для действий (разрешить, отклонить, запросить новое фото)
@@ -311,7 +311,7 @@ def request_photo(call):
     logging.info(f"Перед обработкой кнопки 'Запросить новое фото' текущий source_chat_id: {source_chat_id}, текущий пользователь user_id: {user_id} и текущий group_id: {group_id}")
 
     admin_to_user_map[ADMIN_ID] = user_id
-    request_reason = f"Пожалуйста, укажите причину для запроса нового фото от @{user_id}."
+    request_reason = f"Пожалуйста укажите причину для запроса нового фото от @{user_id}."
     bot.send_message(ADMIN_ID, request_reason)
     bot.answer_callback_query(call.id, "Введите причину запроса нового фото.")
 
@@ -327,7 +327,7 @@ def save_reason(message):
         reason = pending_users[user_id].get('reason', "причина не указана")
 
         # Отправляем сообщение пользователю в личные сообщения с запросом нового фото
-        bot.send_message(user_id,f"Администратор запрашивает новое фото по следующей причине: {reason}\nПожалуйста, отправьте новое фото для повторного согласования.")
+        bot.send_message(user_id,f"Администратор запрашивает новое фото по следующей причине: {reason}\nПожалуйста отправьте новое фото для повторного согласования.")
 
         # Устанавливаем состояние пользователя как ожидающее новое фото
         user_state[user_id] = "awaiting_new_photo"
@@ -388,7 +388,7 @@ def identification_handler(call):
     confirm_button = InlineKeyboardButton("Живу тут и готов подтвердить", callback_data="confirm_residence")
     not_residing_button = InlineKeyboardButton("Не живу тут", callback_data="not_residing")
     keyboard.add(confirm_button, not_residing_button)
-    bot.send_message(call.message.chat.id, "Пожалуйста, подтвердите ваше проживание:", reply_markup=keyboard)
+    bot.send_message(call.message.chat.id, "Пожалуйста подтвердите ваше проживание:", reply_markup=keyboard)
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM groups")
@@ -432,7 +432,7 @@ def return_yes_handler(call):
     cursor.execute("UPDATE users SET date_del = NULL, date_add = ? WHERE tg_id = ?", (now, user_id))
     conn.commit()
     conn.close()
-    bot.send_message(call.message.chat.id, "Отлично! Пожалуйста, отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры.")
+    bot.send_message(call.message.chat.id, "Отлично! Пожалуйста отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры.")
     user_state[user_id] = "awaiting_photo"
     bot.answer_callback_query(call.id)
 
@@ -489,13 +489,13 @@ def process_name(message, user_id):
     name = message.text.strip()
     # Проверка: имя должно быть не длиннее 50 символов
     if len(name) > 50:
-        bot.send_message(message.chat.id, "Имя не должно превышать 50 символов. Пожалуйста, введите корректное имя.")
+        bot.send_message(message.chat.id, "Имя не должно превышать 50 символов. Пожалуйста введите корректное имя.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_name(m, user_id))
         return
     # Фильтрация запрещённых слов (пример: 'бляд', 'хуй', 'пизд', 'сука')
     banned_words = ['бляд', 'хуй', 'пизд', 'сука']
     if any(bad in name.lower() for bad in banned_words):
-        bot.send_message(message.chat.id, "Имя содержит недопустимые слова. Пожалуйста, введите корректное имя.")
+        bot.send_message(message.chat.id, "Имя содержит недопустимые слова. Пожалуйста введите корректное имя.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_name(m, user_id))
         return
 
@@ -536,14 +536,14 @@ def process_surname(message, user_id):
     # Проверка: фамилия не должна превышать 50 символов
     if len(surname) > 50:
         bot.send_message(message.chat.id,
-                         "Фамилия не должна превышать 50 символов. Пожалуйста, введите корректную фамилию.")
+                         "Фамилия не должна превышать 50 символов. Пожалуйста введите корректную фамилию.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_surname(m, user_id))
         return
     # Фильтрация запрещённых слов
     banned_words = ['бляд', 'хуй', 'пизд', 'сука']
     if any(bad in surname.lower() for bad in banned_words):
         bot.send_message(message.chat.id,
-                         "Фамилия содержит недопустимые слова. Пожалуйста, введите корректную фамилию.")
+                         "Фамилия содержит недопустимые слова. Пожалуйста введите корректную фамилию.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_surname(m, user_id))
         return
 
@@ -568,7 +568,7 @@ def process_apartment(message, user_id):
             raise ValueError("Номер квартиры должен быть от 1 до 10000")
     except ValueError as e:
         bot.send_message(message.chat.id,
-                         f"Ошибка: {e}. Пожалуйста, введите номер квартиры в виде целого числа от 1 до 10000.")
+                         f"Ошибка: {e}. Пожалуйста введите номер квартиры в виде целого числа от 1 до 10000.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_apartment(m, user_id))
         return
 
@@ -596,7 +596,7 @@ def process_phone(message, user_id):
         formatted_phone = format_number(phone_number, PhoneNumberFormat.E164)
     except Exception as e:
         error_message = (
-            f"Неверный формат телефона: {e}. Пожалуйста, введите номер в формате +79002003030. Если проблемы сохраняются, свяжитесь с администратором: @proskurninra"
+            f"Неверный формат телефона: {e}. Пожалуйста введите номер в формате +79002003030. Если проблемы сохраняются, свяжитесь с администратором: @proskurninra"
         )
         bot.send_message(message.chat.id, error_message)
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_phone(m, user_id))
@@ -621,7 +621,7 @@ def process_car_count(message, user_id):
         if count < 0 or count > 10:
             raise ValueError("Количество авто должно быть от 0 до 10")
     except ValueError as e:
-        bot.send_message(message.chat.id, f"Ошибка: {e}. Пожалуйста, введите целое число от 0 до 10.")
+        bot.send_message(message.chat.id, f"Ошибка: {e}. Пожалуйста введите целое число от 0 до 10.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_car_count(m, user_id))
         return
 
@@ -644,7 +644,7 @@ def process_car_number(message, user_id):
     # Проверка: номер авто должен быть строкой от 3 до 15 символов
     if len(autonum) < 3 or len(autonum) > 15:
         bot.send_message(message.chat.id,
-                         "Номер авто должен содержать от 3 до 15 символов. Пожалуйста, введите корректный номер авто.")
+                         "Номер авто должен содержать от 3 до 15 символов. Пожалуйста введите корректный номер авто.")
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_car_number(m, user_id))
         return
 
@@ -667,7 +667,7 @@ def process_car_number(message, user_id):
 
 # Завершение анкеты и перевод пользователя в состояние ожидания фото для подтверждения актуальности
 def finalize_questionnaire(chat_id, user_id):
-    bot.send_message(chat_id, "Спасибо, анкета заполнена. Теперь, пожалуйста, отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры. Фотография будет сверяться с фактической обстановкой модераторами. Если Вы хотите воспользоваться подтверждением по документам, сообщите это администратору @proskurninra личным сообщением.")
+    bot.send_message(chat_id, "Спасибо, анкета заполнена. Теперь, пожалуйста отправьте АКТУАЛЬНУЮ фотографию дворовой территории из окна Вашей квартиры. Фотография будет сверяться с фактической обстановкой модераторами. Если Вы хотите воспользоваться подтверждением по документам, сообщите это администратору @proskurninra личным сообщением.")
     user_state[user_id] = "awaiting_photo"
 
 # Обработчик команды /db для администратора.
@@ -706,7 +706,7 @@ def check_handler(message):
     if len(parts) >= 2:
         group_id_check = parts[1]
     else:
-        bot.send_message(message.chat.id, "Пожалуйста, укажите ID группы, например: /check -123456789")
+        bot.send_message(message.chat.id, "Пожалуйста укажите ID группы, например: /check -123456789")
         return
     try:
         conn = sqlite3.connect('database.db')
@@ -726,7 +726,7 @@ def check_handler(message):
                 try:
                     bot.kick_chat_member(group_id_check, tg_id)
                     bot.unban_chat_member(group_id_check, tg_id)
-                    bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста, заполните данные о себе, чтобы получить доступ к чату.")
+                    bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста заполните данные о себе, чтобы получить доступ к чату.")
                 except Exception as e:
                     logging.error(f"Ошибка блокировки пользователя {tg_id} в чате {group_id_check}: {e}")
         bot.send_message(message.chat.id, f"Проверка завершена. Заблокировано {len(not_registered)} пользователей: {not_registered}")
@@ -765,7 +765,7 @@ def checkall_handler(message):
                     try:
                         bot.kick_chat_member(grp_id, tg_id)
                         bot.unban_chat_member(grp_id, tg_id)
-                        bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста, заполните данные о себе, чтобы получить доступ к чату.")
+                        bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста заполните данные о себе, чтобы получить доступ к чату.")
                     except Exception as e:
                         logging.error(f"Ошибка блокировки пользователя {tg_id} в чате {grp_id}: {e}")
             total_blocked += len(not_registered)
