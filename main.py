@@ -323,8 +323,24 @@ def save_reason(message):
         pending_users[user_id]['reason'] = message.text
         bot.send_message(ADMIN_ID, "Причина сохранена.")
         reason = pending_users[user_id].get('reason', "причина не указана")
-        bot.send_message(user_id, f"Требуется новое фото по причине: {reason}")
-        bot.send_message(pending_users[user_id]['source_chat_id'], f"@{user_id} требуется уточнение. Запрос отправлен личным сообщением от чатбота.")
+
+        # Отправляем сообщение пользователю в личные сообщения с запросом нового фото
+        bot.send_message(user_id, f"Администратор запрашивает новое фото по следующей причине: {reason}")
+
+        # Устанавливаем состояние пользователя как ожидающее новое фото
+        user_state[user_id] = "awaiting_new_photo"
+
+        # Получаем имя пользователя для уведомления в групповом чате
+        try:
+            member = bot.get_chat_member(pending_users[user_id]['source_chat_id'], user_id)
+            user_first_name = member.user.first_name if member.user.first_name else str(user_id)
+        except Exception as e:
+            logging.error(f"Ошибка получения информации о пользователе {user_id}: {e}")
+            user_first_name = str(user_id)
+
+        # Отправляем уведомление в групповой чат
+        bot.send_message(pending_users[user_id]['source_chat_id'],
+                         f"@{user_first_name}, бот запросил у вас новое фото. В личных сообщениях от чатбота у вас есть запрос на отправку фото для предоставления доступа.")
     else:
         bot.send_message(ADMIN_ID, "Не найден user_id для ADMIN_ID.")
 
