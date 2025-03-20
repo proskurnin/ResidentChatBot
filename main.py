@@ -695,6 +695,83 @@ def db_handler(message):
     conn.close()
     bot.send_message(message.chat.id, output)
 
+@bot.message_handler(commands=['check'])
+def check_handler(message):
+    if message.from_user.id != int(ADMIN_ID):
+        bot.send_message(message.chat.id, "Нет доступа.")
+        return
+    parts = message.text.split()
+    if len(parts) >= 2:
+        group_id_check = parts[1]
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, укажите ID группы, например: /check -123456789")
+        return
+    try:
+        conn = sqlite3.connect('database.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT tg_id FROM chat_members WHERE chat_id = ?", (group_id_check,))
+        members = cursor.fetchall()
+        conn.close()
+        not_registered = []
+        for (tg_id,) in members:
+            conn = sqlite3.connect('database.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
+            user_in_db = cursor.fetchone()
+            conn.close()
+            if not user_in_db:
+                not_registered.append(tg_id)
+                try:
+                    bot.kick_chat_member(group_id_check, tg_id)
+                    bot.unban_chat_member(group_id_check, tg_id)
+                    bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста, заполните данные о себе, чтобы получить доступ к чату.")
+                except Exception as e:
+                    logging.error(f"Ошибка блокировки пользователя {tg_id} в чате {group_id_check}: {e}")
+        bot.send_message(message.chat.id, f"Проверка завершена. Заблокировано {len(not_registered)} пользователей: {not_registered}")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
+
+
+@bot.message_handler(commands=['checkall'])
+def checkall_handler(message):
+    if message.from_user.id != int(ADMIN_ID):
+        bot.send_message(message.chat.id, "Нет доступа.")
+        return
+    try:
+        conn = sqlite3.connect('database.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT chat_id FROM chat_members")
+        groups = cursor.fetchall()
+        conn.close()
+        total_blocked = 0
+        details = ""
+        for (grp_id,) in groups:
+            conn = sqlite3.connect('database.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT tg_id FROM chat_members WHERE chat_id = ?", (grp_id,))
+            members = cursor.fetchall()
+            conn.close()
+            not_registered = []
+            for (tg_id,) in members:
+                conn = sqlite3.connect('database.db')
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
+                user_in_db = cursor.fetchone()
+                conn.close()
+                if not user_in_db:
+                    not_registered.append(tg_id)
+                    try:
+                        bot.kick_chat_member(grp_id, tg_id)
+                        bot.unban_chat_member(grp_id, tg_id)
+                        bot.send_message(tg_id, "Вы не зарегистрированы в системе. Пожалуйста, заполните данные о себе, чтобы получить доступ к чату.")
+                    except Exception as e:
+                        logging.error(f"Ошибка блокировки пользователя {tg_id} в чате {grp_id}: {e}")
+            total_blocked += len(not_registered)
+            details += f"Чат {grp_id}: заблокировано {len(not_registered)} пользователей\n"
+        bot.send_message(message.chat.id, f"Проверка завершена. Всего заблокировано {total_blocked} пользователей.\n{details}")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
+
 # -------------------- Запуск бота --------------------
 # Запуск цикла опроса для получения обновлений от Telegram
 bot.polling()
