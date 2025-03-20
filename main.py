@@ -569,9 +569,7 @@ def process_phone(message, user_id):
         formatted_phone = format_number(phone_number, PhoneNumberFormat.E164)
     except Exception as e:
         error_message = (
-            f"Неверный формат телефона: {e}\n"
-            "Пожалуйста, введите номер в формате +79002003030.\n"
-            "Если проблемы сохраняются, свяжитесь с администратором: @proskurninra"
+            f"Неверный формат телефона: {e}. Пожалуйста, введите номер в формате +79002003030. Если проблемы сохраняются, свяжитесь с администратором: @proskurninra"
         )
         bot.send_message(message.chat.id, error_message)
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_phone(m, user_id))
