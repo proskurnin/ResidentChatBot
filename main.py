@@ -267,6 +267,15 @@ def deny_access(call):
     global group_id, source_chat_id
     user_id = int(call.data.split(":")[1])
     source_chat_id = pending_users.get(user_id, {}).get('source_chat_id', group_id)
+    now = datetime.now().isoformat()
+    try:
+        conn = sqlite3.connect('database.db')
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ?", (now, user_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Ошибка обновления записи пользователя {user_id} при отклонении доступа: {e}")
     logging.info(f"Перед обработкой кнопки 'Отклонить доступ' текущий source_chat_id: {source_chat_id}, текущий пользователь user_id: {user_id} и текущий group_id: {group_id}")
     member = None
     try:
