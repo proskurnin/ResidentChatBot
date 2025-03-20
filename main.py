@@ -692,17 +692,34 @@ def check_handler(message):
     else:
         bot.send_message(message.chat.id, "Укажите ID группы, например: /check -123456789")
         return
+    not_registered = []
     try:
+        # Получаем список пользователей из таблицы chat_members для указанного чата
         conn = sqlite3.connect('database.db')
         cursor = conn.cursor()
         cursor.execute("SELECT tg_id FROM chat_members WHERE chat_id = ?", (group_id_check,))
-        members = cursor.fetchall()
+        stored_members = cursor.fetchall()
         conn.close()
-        not_registered = []
-        for (tg_id,) in members:
+
+        active_members = []
+        # Проверяем, что участники действительно присутствуют в чате через Telegram API
+        for (tg_id,) in stored_members:
+            try:
+                member = bot.get_chat_member(group_id_check, tg_id)
+                if member.status not in ['left', 'kicked']:
+                    active_members.append(tg_id)
+            except Exception as e:
+                logging.error(f"Ошибка получения информации для пользователя {tg_id} в чате {group_id_check}: {e}")
+
+        # Для каждого активного участника проверяем, зарегистрирован ли он для данного чата
+        for tg_id in active_members:
             conn = sqlite3.connect('database.db')
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM users WHERE tg_id = ?", (tg_id,))
+            cursor.execute("""
+                SELECT users.id FROM users 
+                JOIN houses ON users.house = houses.id 
+                WHERE users.tg_id = ? AND houses.chat_id = ?
+            """, (tg_id, group_id_check))
             user_in_db = cursor.fetchone()
             conn.close()
             if not user_in_db:
@@ -713,7 +730,9 @@ def check_handler(message):
                     bot.send_message(tg_id, "Вы не зарегистрированы. Заполните данные для доступа к чату.")
                 except Exception as e:
                     logging.error(f"Ошибка блокировки {tg_id} в чате {group_id_check}: {e}")
-        bot.send_message(message.chat.id, f"Проверка завершена. Заблокировано {len(not_registered)} пользователей: {not_registered}")
+
+        bot.send_message(message.chat.id,
+                         f"Проверка завершена. Заблокировано {len(not_registered)} пользователей: {not_registered}")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
 
