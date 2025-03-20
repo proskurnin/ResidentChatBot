@@ -662,17 +662,17 @@ def db_handler(message):
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
     output = "Таблица houses\n"
-    output += " id | house_name | chat_id | house_city | house_address \n"
+    output += " id | house_name | chat_id | house_city | house_address | date_add | date_del \n"
     cursor.execute("SELECT * FROM houses")
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
     output += "\nТаблица users\n"
-    output += " id | tg_id | name | surname | house | apartment | phone \n"
+    output += " id | tg_id | name | surname | house | apartment | phone | date_add | date_del \n"
     cursor.execute("SELECT * FROM users")
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
     output += "\nТаблица cars\n"
-    output += " id | user | autonum \n"
+    output += " id | user | autonum | date_add | date_del \n"
     cursor.execute("SELECT * FROM cars")
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
