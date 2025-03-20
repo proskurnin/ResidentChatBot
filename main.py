@@ -683,7 +683,9 @@ def db_handler(message):
     for row in cursor.fetchall():
         output += " | ".join(map(str, row)) + "\n"
     conn.close()
-    bot.send_message(message.chat.id, output)
+    max_length = 4096
+    for i in range(0, len(output), max_length):
+        bot.send_message(message.chat.id, output[i:i+max_length])
 
 @bot.message_handler(commands=['check'])
 def check_handler(message):
