@@ -349,6 +349,9 @@ def request_photo(call):
 # Обработчик сообщений от администратора (ADMIN_ID).
 @bot.message_handler(func=lambda message: message.chat.id == ADMIN_ID)
 def save_reason(message):
+    # Игнорируем сообщения-команды
+    if message.text and message.text.startswith("/"):
+        return
     global group_id
     if ADMIN_ID not in admin_to_user_map:
         return  # Игнорируем сообщения, если нет активного запроса на фото
