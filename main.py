@@ -347,32 +347,24 @@ def request_photo(call):
     bot.answer_callback_query(call.id, "Введите причину запроса нового фото.")
 
 # Обработчик сообщений от администратора (ADMIN_ID).
-@bot.message_handler(func=lambda message: message.chat.id == ADMIN_ID)
+@bot.message_handler(func=lambda message: message.chat.id == ADMIN_ID and not (message.text and message.text.startswith("/")))
 def save_reason(message):
-    # Игнорируем сообщения-команды
-    if message.text and message.text.startswith("/"):
-        return
     global group_id
     if ADMIN_ID not in admin_to_user_map:
         return  # Игнорируем сообщения, если нет активного запроса на фото
-
     user_id = admin_to_user_map.get(ADMIN_ID)
     if user_id is None:
         bot.send_message(ADMIN_ID, "Не найден user_id для ADMIN_ID.")
         return
-
     if user_id not in pending_users:
         pending_users[user_id] = {}
-
     pending_users[user_id]['reason'] = message.text
     bot.send_message(ADMIN_ID, "Причина сохранена.")
-
     reason = pending_users[user_id].get('reason', "причина не указана")
     user_msg = (f"Администратор запрашивает новое фото по причине: {reason}\n"
                 f"Пожалуйста, отправьте новое фото для подтверждения доступа.")
     bot.send_message(user_id, user_msg)
     user_state[user_id] = "awaiting_new_photo"
-
     src_chat = get_source_chat_id(user_id)
     if src_chat is not None:
         try:
@@ -385,8 +377,6 @@ def save_reason(message):
         bot.send_message(src_chat, group_msg)
     else:
         logging.error("src_chat не определён, уведомление не отправлено.")
-
-    # Удаляем admin_to_user_map после завершения обработки
     del admin_to_user_map[ADMIN_ID]
 
 # Обработчик события выхода участника из чата.
