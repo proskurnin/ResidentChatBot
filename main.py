@@ -51,10 +51,11 @@ cursor.execute('''
         date_del TEXT
     )
 ''')
+# Изменённое создание таблицы users: составное уникальное ограничение (tg_id, house)
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tg_id INTEGER UNIQUE,
+        tg_id INTEGER,
         name TEXT,
         surname TEXT,
         house INTEGER,
@@ -62,7 +63,8 @@ cursor.execute('''
         phone TEXT,
         date_add TEXT,
         date_del TEXT,
-        FOREIGN KEY(house) REFERENCES houses(id)
+        FOREIGN KEY(house) REFERENCES houses(id),
+        UNIQUE(tg_id, house)
     )
 ''')
 cursor.execute('''
@@ -135,8 +137,6 @@ def choose_source_handler(call):
          bot.send_message(ADMIN_ID, f"Для пользователя {user_id} выбран чат {chosen_chat_id}.")
 
 # ======================================================
-# Дальше – обработчики команд и callback, изменения внесены в получении source_chat_id:
-
 # Обработчик команды /start в личном чате.
 @bot.message_handler(commands=['start'])
 def start_handler(message):
@@ -169,7 +169,7 @@ def start_introduction_handler(call):
     conn.close()
 
     if user_record:
-        # Пользователь уже зарегистрирован для данного чата, продолжаем стандартный сценарий
+        # Пользователь уже зарегистрирован для данного чата – стандартный сценарий
         if user_record[2] and user_record[2].strip() != "":
             keyboard = InlineKeyboardMarkup(row_width=2)
             yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
@@ -181,7 +181,7 @@ def start_introduction_handler(call):
         bot.answer_callback_query(call.id)
         return
     else:
-        # Пользователь отсутствует для данного чата (новый чат для существующего пользователя или полностью новый пользователь)
+        # Новый чат для существующего (или нового) пользователя – создаём новую запись
         now = datetime.now().isoformat()
         conn = sqlite3.connect('database.db')
         cursor = conn.cursor()
@@ -191,14 +191,7 @@ def start_introduction_handler(call):
         user_state[user_id] = "awaiting_photo"
         bot.send_message(call.message.chat.id, f"Привет {user_first_name}! Мы тебя узнали! Ты пришёл к нам из нового чата дома. Подтверди фотографией, что ты живёшь и в этом доме.")
         bot.answer_callback_query(call.id)
-
-    user_state[user_id] = "awaiting_confirm"
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    confirm_button = InlineKeyboardButton("Живу тут и готов подтвердить", callback_data="confirm_residence")
-    not_residing_button = InlineKeyboardButton("Не живу тут", callback_data="not_residing")
-    keyboard.add(confirm_button, not_residing_button)
-    bot.send_message(call.message.chat.id, "Пожалуйста подтвердите ваше проживание:", reply_markup=keyboard)
-    bot.answer_callback_query(call.id)
+        return
 
 # Обработчик новых участников в группе.
 @bot.message_handler(content_types=['new_chat_members'])
@@ -294,13 +287,12 @@ def photo_handler(message):
 # Callback-обработчик для разрешения доступа пользователю.
 @bot.callback_query_handler(func=lambda call: call.data.startswith("allow:"))
 def allow_access(call):
-    global group_id
     user_id = int(call.data.split(":")[1])
     source_chat_id = get_source_chat_id(user_id)
     if source_chat_id is None:
         bot.send_message(user_id, "Ожидайте, идет уточнение чата администраторами.")
         return
-    logging.info(f"Перед обработкой кнопки 'Дать доступ' текущий source_chat_id: {source_chat_id}, пользователь: {user_id}, группа: {group_id}")
+    logging.info(f"Перед обработкой кнопки 'Дать доступ' текущий source_chat_id: {source_chat_id}, пользователь: {user_id}")
     member = None
     try:
         member = bot.get_chat_member(source_chat_id, user_id)
@@ -326,7 +318,6 @@ def allow_access(call):
 # Callback-обработчик для отклонения доступа.
 @bot.callback_query_handler(func=lambda call: call.data.startswith("deny:"))
 def deny_access(call):
-    global group_id
     user_id = int(call.data.split(":")[1])
     source_chat_id = get_source_chat_id(user_id)
     if source_chat_id is None:
@@ -364,7 +355,6 @@ def deny_access(call):
 # Callback-обработчик для запроса нового фото.
 @bot.callback_query_handler(func=lambda call: call.data.startswith("request_photo:"))
 def request_photo(call):
-    global group_id
     user_id = int(call.data.split(":")[1])
     source_chat_id = get_source_chat_id(user_id)
     if source_chat_id is None:
@@ -439,7 +429,6 @@ def left_member_handler(message):
 # Callback-обработчик для идентификации.
 @bot.callback_query_handler(func=lambda call: call.data == 'identification')
 def identification_handler(call):
-    global group_id
     if call.message.chat is None:
         logging.error("call.message.chat is None, невозможно обработать идентификацию.")
         return
