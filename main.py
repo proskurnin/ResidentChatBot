@@ -186,6 +186,18 @@ def start_introduction_handler(call):
 def new_member_handler(message):
     global group_id
     group_id = message.chat.id  # Обновляем ID группы
+
+    # Проверяем, существует ли запись о данном чате в таблице houses
+    conn = sqlite3.connect('database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (group_id,))
+    house_record = cursor.fetchone()
+    if house_record is None:
+        now = datetime.now().isoformat()
+        cursor.execute("INSERT INTO houses (chat_id, date_add) VALUES (?, ?)", (group_id, now))
+        conn.commit()
+    conn.close()
+
     for new_member in message.new_chat_members:
         if new_member.id not in pending_users or pending_users[new_member.id]['status'] in ['approved', 'left']:
             pending_users[new_member.id] = {
