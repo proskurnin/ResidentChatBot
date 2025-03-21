@@ -210,12 +210,12 @@ def new_member_handler(message):
                     bot.restrict_chat_member(group_id, new_member.id, can_send_messages=False)
                 except telebot.apihelper.ApiTelegramException as e:
                     logging.error(f"Ошибка ограничения для пользователя {new_member.id}: {e}")
-            keyboard = InlineKeyboardMarkup(row_width=1)
-            access_button = InlineKeyboardButton("Получить доступ", url=f"https://t.me/{BOT_NAME}?start")
-            keyboard.add(access_button)
-            bot.send_message(group_id,
-                f"Добро пожаловать, @{new_member.first_name}! Чтобы получить доступ к чату, пожалуйста пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
-                reply_markup=keyboard)
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                access_button = InlineKeyboardButton("Получить доступ", url=f"https://t.me/{BOT_NAME}?start")
+                keyboard.add(access_button)
+                bot.send_message(group_id,
+                    f"Добро пожаловать, @{new_member.first_name}! Чтобы получить доступ к чату, пожалуйста пройдите процедуру знакомства и подтверждения. Чтобы получить доступ, нажмите кнопку ниже.",
+                    reply_markup=keyboard)
 
 # Обработчик фото для идентификации.
 @bot.message_handler(content_types=['photo'])
