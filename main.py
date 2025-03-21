@@ -533,22 +533,22 @@ def process_name(message, user_id):
     now = datetime.now().isoformat()
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM users WHERE tg_id = ?", (user_id,))
+    source_id = pending_users.get(user_id, {}).get('source_chat_id')
+    house_id = None
+    if source_id:
+        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_id,))
+        house = cursor.fetchone()
+        if house is None:
+            cursor.execute("INSERT INTO houses (chat_id, date_add) VALUES (?, ?)", (source_id, now))
+            house_id = cursor.lastrowid
+        else:
+            house_id = house[0]
+    cursor.execute("SELECT id FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
     result = cursor.fetchone()
     if result is None:
-        source_id = pending_users.get(user_id, {}).get('source_chat_id')
-        house_id = None
-        if source_id:
-            cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_id,))
-            house = cursor.fetchone()
-            if house is None:
-                cursor.execute("INSERT INTO houses (chat_id, date_add) VALUES (?, ?)", (source_id, now))
-                house_id = cursor.lastrowid
-            else:
-                house_id = house[0]
         cursor.execute("INSERT INTO users (tg_id, name, house, date_add) VALUES (?, ?, ?, ?)", (user_id, name, house_id, now))
     else:
-        cursor.execute("UPDATE users SET name = ?, date_add = ? WHERE tg_id = ?", (name, now, user_id))
+        cursor.execute("UPDATE users SET name = ?, date_add = ? WHERE id = ?", (name, now, result[0]))
     conn.commit()
     conn.close()
     ask_surname(message.chat.id, user_id)
