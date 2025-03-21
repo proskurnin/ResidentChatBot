@@ -155,9 +155,16 @@ def start_handler(message):
 def start_introduction_handler(call):
     user_id = call.from_user.id
     user_first_name = f"@{call.from_user.first_name}" if call.from_user.first_name else "сосед"
+    source_chat = get_source_chat_id(user_id)
+    house_id = None
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ?", (user_id,))
+    if source_chat:
+         cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_chat,))
+         house_row = cursor.fetchone()
+         if house_row:
+              house_id = house_row[0]
+    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
     user_record = cursor.fetchone()
     conn.close()
 
@@ -490,9 +497,16 @@ def return_no_handler(call):
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_residence")
 def confirm_residence_handler(call):
     user_id = call.from_user.id
+    source_chat = get_source_chat_id(user_id)
+    house_id = None
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ?", (user_id,))
+    if source_chat:
+         cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_chat,))
+         house_row = cursor.fetchone()
+         if house_row:
+              house_id = house_row[0]
+    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
     user_record = cursor.fetchone()
     if user_record:
         if not user_record[2] or user_record[2].strip() == "":
