@@ -189,7 +189,7 @@ def start_introduction_handler(call):
         conn.commit()
         conn.close()
         user_state[user_id] = "awaiting_photo"
-        bot.send_message(call.message.chat.id, f"Привет {user_first_name}! Мы тебя узнали. Ты пришёл к нам из нового чата дома. Подтверди фотографией, что ты живёшь и в этом доме.")
+        bot.send_message(call.message.chat.id, f"Привет {user_first_name}! Мы тебя узнали! Ты пришёл к нам из нового чата дома. Подтверди фотографией, что ты живёшь и в этом доме.")
         bot.answer_callback_query(call.id)
 
     user_state[user_id] = "awaiting_confirm"
