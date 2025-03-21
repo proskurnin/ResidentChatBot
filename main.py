@@ -169,6 +169,7 @@ def start_introduction_handler(call):
     conn.close()
 
     if user_record:
+        # Пользователь уже зарегистрирован для данного чата, продолжаем стандартный сценарий
         if user_record[2] and user_record[2].strip() != "":
             keyboard = InlineKeyboardMarkup(row_width=2)
             yes_button = InlineKeyboardButton("Да", callback_data="return_yes")
@@ -179,6 +180,17 @@ def start_introduction_handler(call):
             bot.send_message(call.message.chat.id, f"{('@' + user_record[1]) if user_record[1] and user_record[1] != 'None' else ''}, мы тебя узнали и ты уже зарегистрирован.")
         bot.answer_callback_query(call.id)
         return
+    else:
+        # Пользователь отсутствует для данного чата (новый чат для существующего пользователя или полностью новый пользователь)
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect('database.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (tg_id, name, house, date_add) VALUES (?, ?, ?, ?)", (user_id, call.from_user.first_name, house_id, now))
+        conn.commit()
+        conn.close()
+        user_state[user_id] = "awaiting_photo"
+        bot.send_message(call.message.chat.id, f"Привет {user_first_name}! Мы тебя узнали. Ты пришёл к нам из нового чата дома. Подтверди фотографией, что ты живёшь и в этом доме.")
+        bot.answer_callback_query(call.id)
 
     user_state[user_id] = "awaiting_confirm"
     keyboard = InlineKeyboardMarkup(row_width=1)
