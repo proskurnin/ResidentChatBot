@@ -601,7 +601,7 @@ def deny_access(call):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         # Получаем идентификатор дома (house_id) для текущего чата
-        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (message.chat.id,))
+        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (call.message.chat.id,))
         house_row = cursor.fetchone()
         if house_row:
             house_id = house_row[0]
