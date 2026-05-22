@@ -6,11 +6,25 @@
 
 # Импорт необходимых модулей:
 from datetime import datetime  # Для получения текущей даты и времени
-import sqlite3                # Для работы с базой данных SQLite
 import logging                # Для ведения логов
 import phonenumbers           # Для валидации и форматирования телефонных номеров
 from phonenumbers import PhoneNumberFormat, format_number  # Константы и функции для форматирования номеров
 from telebot import types
+from repositories.db import (
+    ensure_house_exists,
+    get_house_id_by_chat_id,
+    get_last_user_id_by_tg_and_house,
+    insert_car_for_user,
+    insert_user,
+    update_user_apartment_by_id,
+    update_user_name_by_id,
+    update_user_phone_by_id,
+    update_user_surname_by_id,
+    get_user_id_by_tg_and_house,
+    get_user_id_by_tg_and_null_house,
+    get_user_record_by_tg_and_house,
+    get_user_record_by_tg_and_null_house,
+)
 
 # Глобальные переменные, которые будут инициализированы из main.py
 # bot - экземпляр чат-бота, DB_FILE - путь к файлу базы данных,
@@ -20,6 +34,17 @@ bot = None
 DB_FILE = None
 pending_users = None
 user_state = None
+
+
+def get_current_house_id(user_id):
+    """
+    Возвращает house_id для текущего пользователя через сохранённый source_chat_id.
+    Если дом не найден или чат ещё не определён, возвращает None.
+    """
+    source_chat_id = pending_users.get(user_id, {}).get('source_chat_id') if pending_users else None
+    if not source_chat_id:
+        return None
+    return get_house_id_by_chat_id(DB_FILE, source_chat_id)
 
 def ask_registration_confirmation(chat_id, user_id):
     """
@@ -112,52 +137,31 @@ def process_name(message, user_id):
 
     try:
         # Подключаемся к базе данных
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-
         # Получаем идентификатор источника (chat_id) из словаря pending_users для данного пользователя
         source_id = pending_users.get(user_id, {}).get('source_chat_id')
-        house_id = None
+        house_id = get_current_house_id(user_id)
 
         # Если идентификатор источника существует, проверяем наличие дома в таблице houses
-        if source_id:
-            cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_id,))
-            house = cursor.fetchone()
-            # Если дом не найден, создаём новую запись в таблице houses
-            if house is None:
-                cursor.execute("INSERT INTO houses (chat_id, date_add) VALUES (?, ?)", (source_id, now))
-                house_id = cursor.lastrowid
-            else:
-                # Если дом найден, используем его идентификатор
-                house_id = house[0]
+        if source_id and house_id is None:
+            house_id = ensure_house_exists(DB_FILE, source_id, now)
 
         # Проверяем, существует ли уже запись пользователя для данного дома
         if house_id is None:
-            cursor.execute("SELECT id FROM users WHERE tg_id = ? AND house IS NULL", (user_id,))
+            result = get_user_record_by_tg_and_null_house(DB_FILE, user_id)
         else:
-            cursor.execute("SELECT id FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
-        result = cursor.fetchone()
+            result = get_user_record_by_tg_and_house(DB_FILE, user_id, house_id)
 
         # Если запись не найдена, создаём новую запись с tg_id и именем
         if result is None:
-            cursor.execute("INSERT INTO users (tg_id, name) VALUES (?, ?)", (user_id, name))
+            insert_user(DB_FILE, user_id, name, house_id)
         else:
             # Если запись существует, обновляем имя и дату добавления
-            cursor.execute("UPDATE users SET name = ?, date_add = ? WHERE id = ?", (name, now, result[0]))
-
-        # Сохраняем изменения в базе данных
-        conn.commit()
+            update_user_name_by_id(DB_FILE, result[0], name, now)
     except Exception as e:
         # Логируем ошибку и сообщаем пользователю о проблеме с сохранением данных
         logging.error(f"Ошибка при сохранении имени для пользователя {user_id}: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных, попробуйте позже.")
         return
-    finally:
-        # Закрываем соединение с базой данных
-        try:
-            conn.close()
-        except Exception as e:
-            logging.error(f"Ошибка закрытия БД для пользователя {user_id}: {e}")
 
     # После успешной обработки имени переходим к запросу фамилии
     ask_surname(message.chat.id, user_id)
@@ -188,22 +192,18 @@ def process_surname(message, user_id):
         return
 
     try:
-        # Подключаемся к базе данных для обновления записи пользователя
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET surname = ? WHERE tg_id = ?", (surname, user_id))
-        conn.commit()
+        house_id = get_current_house_id(user_id)
+        if house_id is None:
+            user_id_record = get_user_id_by_tg_and_null_house(DB_FILE, user_id)
+        else:
+            user_id_record = get_user_id_by_tg_and_house(DB_FILE, user_id, house_id)
+        if user_id_record is not None:
+            update_user_surname_by_id(DB_FILE, user_id_record, surname)
     except Exception as e:
         # Логируем ошибку и уведомляем пользователя о проблеме
         logging.error(f"Ошибка при сохранении фамилии для пользователя {user_id}: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных, попробуйте позже.")
         return
-    finally:
-        # Закрываем соединение с базой данных
-        try:
-            conn.close()
-        except Exception as e:
-            logging.error(f"Ошибка закрытия БД для пользователя {user_id}: {e}")
 
     # После успешного обновления фамилии переходим к запросу номера квартиры
     ask_apartment(message.chat.id, user_id)
@@ -239,44 +239,34 @@ def process_apartment(message, user_id):
         return
 
     try:
-        # Подключаемся к базе данных
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
+        house_id = get_current_house_id(user_id)
 
         # Если пользователь регистрируется для нового дома, его состояние должно быть "awaiting_apartment_new_house"
         if user_state.get(user_id) == "awaiting_apartment_new_house":
-            # Получаем chat_id источника регистрации
-            source_chat = pending_users.get(user_id, {}).get('source_chat_id')
-            # Находим последнюю запись для данного пользователя по дому NULL
-            cursor.execute("SELECT MAX(id) FROM users WHERE tg_id = ? AND house IS NULL", (user_id,))
-            record = cursor.fetchone()
-            record_id = record[0] if record and record[0] is not None else None
+            # Находим последнюю запись для данного пользователя в текущем доме.
+            record_id = get_last_user_id_by_tg_and_house(DB_FILE, user_id, house_id)
 
             # Если запись не найдена, логируем ошибку и сообщаем пользователю
             if record_id is None:
-                logging.error(f"Новая запись для пользователя {user_id} не найдена при обновлении номера квартиры для дома {source_chat}.")
+                logging.error(f"Новая запись для пользователя {user_id} не найдена при обновлении номера квартиры.")
                 bot.send_message(message.chat.id, "Произошла ошибка при обновлении данных, попробуйте позже.")
                 return
 
             # Обновляем номер квартиры в найденной записи
-            cursor.execute("UPDATE users SET apartment = ? WHERE id = ?", (str(apartment), record_id))
+            update_user_apartment_by_id(DB_FILE, record_id, str(apartment), house_id)
         else:
             # Если дом уже существует, обновляем номер квартиры по идентификатору Telegram
-            cursor.execute("UPDATE users SET apartment = ? WHERE tg_id = ?", (str(apartment), user_id))
-
-        # Сохраняем изменения
-        conn.commit()
+            if house_id is None:
+                user_record_id = get_user_id_by_tg_and_null_house(DB_FILE, user_id)
+            else:
+                user_record_id = get_user_id_by_tg_and_house(DB_FILE, user_id, house_id)
+            if user_record_id is not None:
+                update_user_apartment_by_id(DB_FILE, user_record_id, str(apartment))
     except Exception as e:
         # Логируем и уведомляем о возникшей ошибке
         logging.error(f"Ошибка при сохранении номера квартиры для пользователя {user_id}: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных, попробуйте позже.")
         return
-    finally:
-        # Закрываем соединение с базой данных
-        try:
-            conn.close()
-        except Exception as e:
-            logging.error(f"Ошибка закрытия БД для пользователя {user_id}: {e}")
 
     # Логируем успешное сохранение номера квартиры для отладки
     logging.info(f"Пользователь {user_id}: номер квартиры '{apartment}' успешно сохранён.")
@@ -315,20 +305,17 @@ def process_phone(message, user_id):
         bot.register_next_step_handler_by_chat_id(message.chat.id, lambda m: process_phone(m, user_id))
         return
     try:
-        # Подключаемся к базе данных для обновления записи пользователя
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET phone = ? WHERE tg_id = ?", (formatted_phone, user_id))
-        conn.commit()
+        house_id = get_current_house_id(user_id)
+        if house_id is None:
+            user_record_id = get_user_id_by_tg_and_null_house(DB_FILE, user_id)
+        else:
+            user_record_id = get_user_id_by_tg_and_house(DB_FILE, user_id, house_id)
+        if user_record_id is not None:
+            update_user_phone_by_id(DB_FILE, user_record_id, formatted_phone)
     except Exception as e:
         logging.error(f"Ошибка при сохранении телефона для пользователя {user_id}: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных, попробуйте позже.")
         return
-    finally:
-        try:
-            conn.close()
-        except Exception as e:
-            logging.error(f"Ошибка закрытия БД для пользователя {user_id}: {e}")
 
     # После успешного сохранения номера переходим к запросу информации об автомобилях
     ask_car_count(message.chat.id, user_id)
@@ -383,26 +370,19 @@ def process_car_number(message, user_id):
         return
 
     try:
-        # Подключаемся к базе данных
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        # Получаем запись пользователя по tg_id
-        cursor.execute("SELECT id FROM users WHERE tg_id = ?", (user_id,))
-        user_record = cursor.fetchone()
-        if user_record:
+        # Получаем запись пользователя по текущему дому, чтобы не смешивать данные между домами.
+        house_id = get_current_house_id(user_id)
+        if house_id is None:
+            user_record_id = get_user_id_by_tg_and_null_house(DB_FILE, user_id)
+        else:
+            user_record_id = get_user_id_by_tg_and_house(DB_FILE, user_id, house_id)
+        if user_record_id:
             # Вставляем новую запись в таблицу cars с данными о номере автомобиля, оставляя date_add равным NULL
-            cursor.execute("INSERT INTO cars (user, autonum) VALUES (?, ?)", (user_record[0], autonum))
-        conn.commit()
+            insert_car_for_user(DB_FILE, user_record_id, autonum)
     except Exception as e:
         logging.error(f"Ошибка при сохранении номера авто для пользователя {user_id}: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных, попробуйте позже.")
         return
-    finally:
-        # Закрываем соединение с базой данных
-        try:
-            conn.close()
-        except Exception as e:
-            logging.error(f"Ошибка закрытия БД для пользователя {user_id}: {e}")
 
     # Увеличиваем счётчик введённых автомобилей
     user_state[user_id]["current_car"] += 1

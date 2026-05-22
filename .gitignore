@@ -2,3 +2,6 @@
 .idea/
 database.db
 .DS_Store
+.coverage
+__pycache__/
+*.pyc

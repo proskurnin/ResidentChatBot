@@ -2,7 +2,7 @@
 ============================
 Этот модуль реализует Telegram-бота для управления процессом регистрации и идентификации жильцов.
 Бот обрабатывает команды, новые входы в чат, идентификацию посредством отправки фото, а также проводит опрос для регистрации.
-Конфигурация загружается из файла .env, а данные сохраняются в SQLite базе данных.
+Конфигурация централизована в config.py, а данные сохраняются в SQLite базе данных.
 """
 
 # ====================================================================
@@ -34,31 +34,47 @@ import logging               # logging: для логирования дейст
 from datetime import datetime, timedelta  # datetime: для работы с датами и временем.
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 # telebot.types: предоставляет классы для создания интерактивных клавиатур.
-import os                    # os: для работы с файловой системой и переменными окружения.
-from dotenv import load_dotenv  # load_dotenv: позволяет загрузить переменные окружения из файла .env.
-import sqlite3               # sqlite3: для работы с SQLite базой данных.
+import time
+from config import ADMIN_ID, API_TOKEN, BOT_NAME, DB_FILE, LOG_LEVEL_NAME, TELEGRAM_PROXY
+from repositories.db import (
+    count_active_users_by_house,
+    activate_cars_by_tg,
+    get_active_user_count_by_tg,
+    ensure_house_exists,
+    get_active_house_rows,
+    get_active_user_tg_ids_by_house,
+    get_active_user_rows_by_house,
+    get_house_chat_rows_by_user_tg,
+    get_house_id_by_chat_id,
+    get_any_user_id_by_tg,
+    get_user_basic_profile_by_tg,
+    get_user_full_record_by_tg_and_house,
+    get_user_record_by_tg_and_house,
+    get_user_id_by_tg_and_house,
+    get_user_id_by_tg_and_null_house,
+    get_user_registration_profile_by_tg,
+    initialize_schema,
+    dump_tables_text,
+    mark_cars_date_del_by_tg,
+    mark_cars_date_del_by_user_id,
+    mark_user_date_del_by_tg_and_house,
+    search_active_user_rows_by_apartment,
+    insert_user,
+    update_user_name_by_id,
+    update_user_phone_by_id,
+    update_user_surname_by_id,
+    update_user_date_add_date_del_by_tg_and_house,
+    update_user_house_date_add_date_del_by_tg_null_house,
+)
 import registration
-
-# -------------------------------
-# Определение путей и загрузка настроек
-# -------------------------------
-# Определяем абсолютный путь к директории текущего файла.
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Формируем путь к файлу базы данных.
-DB_FILE = os.path.join(BASE_DIR, "database.db")
-
-# Загружаем переменные окружения из файла .env
-load_dotenv()
-# Получаем API_TOKEN, ADMIN_ID и BOT_NAME из переменных окружения.
-API_TOKEN = os.getenv("API_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-BOT_NAME = os.getenv("BOT_NAME")
+from requests.exceptions import RequestException
 
 # -------------------------------
 # Настройка логирования
 # -------------------------------
 # Логирование настроено на вывод времени, уровня и текста сообщения.
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=getattr(logging, LOG_LEVEL_NAME, logging.INFO), format='%(asctime)s - %(levelname)s - %(message)s')
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # -------------------------------
 # Глобальные словари для отслеживания состояний
@@ -70,76 +86,23 @@ admin_state = {}        # Состояние администратора, на�
 # -------------------------------
 # Инициализация базы данных
 # -------------------------------
-# Подключаемся к базе данных; если файл отсутствует, SQLite создаст его автоматически.
-conn = sqlite3.connect(DB_FILE)
-cursor = conn.cursor()
-
-# Таблица houses хранит информацию о домах (групповых чатах):
-#   - house_name: название дома (необязательно)
-#   - chat_id: уникальный идентификатор чата
-#   - house_city, house_address: адресные данные
-#   - date_add, date_del: даты создания и удаления записи.
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS houses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        house_name TEXT,
-        chat_id INTEGER UNIQUE,
-        house_city TEXT,
-        house_address TEXT,
-        date_add TEXT,
-        date_del TEXT
-    )
-''')
-
-# Таблица users хранит информацию о пользователях:
-#   - tg_id: Telegram ID пользователя.
-#   - name, surname: имя и фамилия.
-#   - house: идентификатор дома, к которому привязан пользователь.
-#   - apartment: номер квартиры.
-#   - phone: номер телефона.
-#   - date_add, date_del: даты регистрации и удаления.
-# Уникальность определяется сочетанием (tg_id, house) — пользователь может быть зарегистрирован в разных домах.
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tg_id INTEGER,
-        name TEXT,
-        surname TEXT,
-        house INTEGER,
-        apartment TEXT,
-        phone TEXT,
-        date_add TEXT,
-        date_del TEXT,
-        FOREIGN KEY(house) REFERENCES houses(id),
-        UNIQUE(tg_id, house)
-    )
-''')
-
-# Таблица cars хранит информацию об автомобилях пользователей:
-#   - user: внешний ключ, ссылающийся на пользователя.
-#   - autonum: номер автомобиля.
-#   - date_add, date_del: даты добавления и удаления записи.
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS cars (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user INTEGER,
-        autonum TEXT,
-        date_add TEXT,
-        date_del TEXT,
-        FOREIGN KEY(user) REFERENCES users(id)
-    )
-''')
-conn.commit()
-conn.close()
-
-# Проверка наличия обязательных переменных окружения.
-if not API_TOKEN or not ADMIN_ID:
-    raise ValueError("API_TOKEN и ADMIN_ID должны быть указаны в .env")
+initialize_schema(DB_FILE)
 
 # -------------------------------
 # Инициализация Telegram-бота
 # -------------------------------
+if TELEGRAM_PROXY:
+    telebot.apihelper.proxy = {
+        "http": TELEGRAM_PROXY,
+        "https": TELEGRAM_PROXY,
+    }
 bot = telebot.TeleBot(API_TOKEN)
+logging.info(
+    "ResidentChatBot started: db=%s, proxy=%s, log_level=%s",
+    DB_FILE,
+    "enabled" if TELEGRAM_PROXY else "disabled",
+    LOG_LEVEL_NAME,
+)
 
 # Словарь pending_users хранит данные о новых участниках:
 #   - status: текущий статус регистрации (например, 'awaiting_photo').
@@ -165,16 +128,7 @@ def get_source_chat_id(user_id):
     """
     if user_id in pending_users and pending_users[user_id].get('source_chat_id'):
         return pending_users[user_id]['source_chat_id']
-    # Подключаемся к БД с использованием пути DB_FILE
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-      SELECT h.chat_id, h.house_name FROM houses h
-      JOIN users u ON u.house = h.id
-      WHERE u.tg_id = ?
-    """, (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = get_house_chat_rows_by_user_tg(DB_FILE, user_id)
     if len(rows) == 1:
          pending_users[user_id] = pending_users.get(user_id, {})
          pending_users[user_id]['source_chat_id'] = rows[0][0]
@@ -306,21 +260,14 @@ def start_introduction_handler(call):
          logging.info(f"Используем существующий source_chat для пользователя {user_id}: {db_source}")
 
     # Проверяем наличие записи о доме (чат) в таблице houses
-    house_id = None
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_chat,))
-    house_row = cursor.fetchone()
-    if house_row:
-        house_id = house_row[0]
+    house_id = get_house_id_by_chat_id(DB_FILE, source_chat)
+    if house_id:
         logging.info(f"Найден дом для чата {source_chat}: house_id = {house_id}")
     else:
         logging.info(f"Дом для чата {source_chat} не найден")
 
     # Проверяем, зарегистрирован ли пользователь для этого дома
-    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
-    user_record = cursor.fetchone()
-    conn.close()
+    user_record = get_user_record_by_tg_and_house(DB_FILE, user_id, house_id)
     logging.info(f"Проверка регистрации пользователя {user_id} для дома {house_id}: user_record = {user_record}")
 
     if user_record:
@@ -344,19 +291,11 @@ def start_introduction_handler(call):
         # Если пользователь не зарегистрирован для этого дома
         logging.info(f"Пользователь {user_id} не зарегистрирован для дома {house_id}. Запускаем процесс регистрации.")
         # Если пользователь уже существует в БД (зарегистрирован в другом доме), добавляем новую запись для текущего дома.
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM users WHERE tg_id = ?", (user_id,))
-        existing = cursor.fetchone()
-        conn.close()
+        existing = get_any_user_id_by_tg(DB_FILE, user_id)
         if existing:
             logging.info(f"Пользователь {user_id} уже есть в БД, но не зарегистрирован для текущего дома {house_id}.")
             # Извлекаем уже сохраненные данные для повторного использования.
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name, surname, phone FROM users WHERE tg_id = ? LIMIT 1", (user_id,))
-            data = cursor.fetchone()
-            conn.close()
+            data = get_user_registration_profile_by_tg(DB_FILE, user_id)
             if data:
                 name_existing, surname_existing, phone_existing = data
             else:
@@ -364,21 +303,21 @@ def start_introduction_handler(call):
                 surname_existing = ""
                 phone_existing = ""
             now = datetime.now().isoformat()
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            # Ищем существующую запись для данного пользователя с house равным NULL
-            cursor.execute("SELECT id FROM users WHERE tg_id = ? AND house IS NULL", (user_id,))
-            record = cursor.fetchone()
+            # Ищем существующую запись для данного пользователя в текущем доме.
+            record = get_user_full_record_by_tg_and_house(DB_FILE, user_id, house_id)
             if record:
-                # Если запись найдена, обновляем её, сбрасывая date_del
-                cursor.execute("UPDATE users SET name = ?, surname = ?, phone = ?, date_del = NULL WHERE id = ?",
-                               (name_existing, surname_existing, phone_existing, record[0]))
+                # Если запись найдена, обновляем её, сбрасывая date_del.
+                update_user_name_by_id(DB_FILE, record[0], name_existing)
+                update_user_surname_by_id(DB_FILE, record[0], surname_existing)
+                update_user_phone_by_id(DB_FILE, record[0], phone_existing)
             else:
-                # Если записи нет, вставляем новую
-                cursor.execute("INSERT INTO users (tg_id, name, surname, phone) VALUES (?, ?, ?, ?)",
-                               (user_id, name_existing, surname_existing, phone_existing))
-            conn.commit()
-            conn.close()
+                # Если записи нет, вставляем новую для текущего дома.
+                insert_user(DB_FILE, user_id, name_existing, house_id)
+                new_record = get_user_full_record_by_tg_and_house(DB_FILE, user_id, house_id)
+                if new_record:
+                    update_user_name_by_id(DB_FILE, new_record[0], name_existing)
+                    update_user_surname_by_id(DB_FILE, new_record[0], surname_existing)
+                    update_user_phone_by_id(DB_FILE, new_record[0], phone_existing)
             # Устанавливаем состояние для запроса номера квартиры в новом доме.
             user_state[user_id] = "awaiting_apartment_new_house"
             bot.send_message(user_id,
@@ -408,16 +347,8 @@ def new_member_handler(message):
     logging.info("new_member_handler вызван")
     chat_id = message.chat.id
     # Проверяем наличие записи о чате в таблице houses
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (chat_id,))
-    house_record = cursor.fetchone()
-    if house_record is None:
-        # Если записи нет, создаём новую с текущей датой.
-        now = datetime.now().isoformat()
-        cursor.execute("INSERT INTO houses (chat_id, date_add) VALUES (?, ?)", (chat_id, now))
-        conn.commit()
-    conn.close()
+    now = datetime.now().isoformat()
+    ensure_house_exists(DB_FILE, chat_id, now)
 
     # Для каждого нового участника выполняем сохранение данных и отправку уведомления.
     for new_member in message.new_chat_members:
@@ -458,11 +389,7 @@ def photo_handler(message):
             bot.send_message(message.from_user.id, "Фото получено. Ожидайте подтверждения.")
         else:
             # Извлекаем данные пользователя из БД для формирования сообщения.
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name, surname, apartment, phone FROM users WHERE tg_id = ?", (user_id,))
-            user_info = cursor.fetchone()
-            conn.close()
+            user_info = get_user_basic_profile_by_tg(DB_FILE, user_id)
             if user_info:
                 name, surname, apartment, phone = user_info
             else:
@@ -547,31 +474,19 @@ def allow_access(call):
     logging.info("Доступ открыт")
 
     now = datetime.now().isoformat()
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_chat_id,))
-    house_row = cursor.fetchone()
-    if house_row:
-        house_id = house_row[0]
+    house_id = get_house_id_by_chat_id(DB_FILE, source_chat_id)
+    if house_id:
         # Сначала пытаемся найти запись пользователя для данного дома (существующего пользователя)
-        cursor.execute("SELECT id FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
-        record = cursor.fetchone()
+        record = get_user_record_by_tg_and_house(DB_FILE, user_id, house_id)
         if record:
             # Существующий пользователь: обновляем дату регистрации и сбрасываем date_del для данного дома.
-            cursor.execute("UPDATE users SET date_add = ?, date_del = NULL WHERE tg_id = ? AND house = ?",
-                           (now, user_id, house_id))
+            update_user_date_add_date_del_by_tg_and_house(DB_FILE, user_id, house_id, now)
         else:
             # Новый пользователь: обновляем запись, где house равен NULL, устанавливая house, дату регистрации и сбрасывая date_del.
-            cursor.execute(
-                "UPDATE users SET house = ?, date_add = ?, date_del = NULL WHERE tg_id = ? AND house IS NULL",
-                (house_id, now, user_id))
-        conn.commit()
+            update_user_house_date_add_date_del_by_tg_null_house(DB_FILE, user_id, house_id, now)
 
         # После обновления записи пользователя сбрасываем date_del и устанавливаем date_add для всех записей автомобилей этого пользователя.
-        cursor.execute("UPDATE cars SET date_del = NULL, date_add = ? WHERE user IN (SELECT id FROM users WHERE tg_id = ?)",
-                       (now, user_id))
-        conn.commit()
-    conn.close()
+        activate_cars_by_tg(DB_FILE, user_id, now)
 
     bot.send_message(user_id, f"Доступ разрешён и вы можете пользоваться чатом жильцов" +
                      (f" (@{bot.get_chat(source_chat_id).username})" if bot.get_chat(source_chat_id).username else "") + ".")
@@ -598,20 +513,8 @@ def deny_access(call):
         return
     now = datetime.now().isoformat()
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        # Получаем идентификатор дома (house_id) для текущего чата
-        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (call.message.chat.id,))
-        house_row = cursor.fetchone()
-        if house_row:
-            house_id = house_row[0]
-        else:
-            house_id = None
-
-        # Обновляем запись для пользователя, учитывая как tg_id, так и house
-        cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ? AND house = ?", (now, user_id, house_id))
-        conn.commit()
-        conn.close()
+        house_id = get_house_id_by_chat_id(DB_FILE, source_chat_id)
+        mark_user_date_del_by_tg_and_house(DB_FILE, user_id, house_id, now)
     except Exception as e:
         logging.error(f"Ошибка обновления записи для {user_id} при отклонении: {e}")
     member = None
@@ -717,46 +620,32 @@ def left_member_handler(message):
     now = datetime.now().isoformat()
     logging.info(f"Обработка выхода пользователя {user_id} из чата {message.chat.id} в {now}")
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
         # Получаем house_id для текущего чата
-        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (message.chat.id,))
-        house_row = cursor.fetchone()
-        if house_row:
-            house_id = house_row[0]
+        house_id = get_house_id_by_chat_id(DB_FILE, message.chat.id)
+        if house_id:
             logging.info(f"Для пользователя {user_id} найден дом: house_id = {house_id} в чате {message.chat.id}")
         else:
             house_id = None
             logging.warning(f"Для чата {message.chat.id} не найден дом (house_id = None)")
 
         # Обновляем запись для данного чата (только для этого дома)
+        mark_user_date_del_by_tg_and_house(DB_FILE, user_id, house_id, now)
         if house_id is not None:
-            cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ? AND house = ?", (now, user_id, house_id))
             logging.info(f"Обновлена дата удаления для пользователя {user_id} с house_id = {house_id}")
         else:
-            # Если дом не найден, можно обновить все записи для tg_id (на всякий случай)
-            cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ?", (now, user_id))
             logging.info(f"Обновлена дата удаления для пользователя {user_id} для всех записей (house_id не найден)")
 
         # Проверяем наличие активных записей (где date_del пустой) для этого пользователя
-        cursor.execute("SELECT COUNT(*) FROM users WHERE tg_id = ? AND (date_del IS NULL OR date_del = '')", (user_id,))
-        active_count = cursor.fetchone()[0]
+        active_count = get_active_user_count_by_tg(DB_FILE, user_id)
         logging.info(f"Для пользователя {user_id} осталось {active_count} активных записей в таблице users")
         if active_count == 0:
             # Обновляем поле date_del для всех автомобилей данного пользователя
             # Здесь используется вложенный запрос, который выбирает все id записей пользователя из таблицы users,
             # что позволяет обновить все авто, связанные с этим пользователем.
-            cursor.execute("UPDATE cars SET date_del = ? WHERE user IN (SELECT id FROM users WHERE tg_id = ?)",
-                           (now, user_id))
+            mark_cars_date_del_by_tg(DB_FILE, user_id, now)
             logging.info(f"Обновлена дата удаления для всех автомобилей пользователя {user_id}")
-        conn.commit()
     except Exception as e:
         logging.error(f"Ошибка при обработке выхода пользователя {user_id}: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception as e:
-            logging.error(f"Ошибка закрытия БД для {user_id}: {e}")
     if user_id in pending_users:
         del pending_users[user_id]
         logging.info(f"Пользователь {user_id} удалён из pending_users")
@@ -791,13 +680,6 @@ def identification_handler(call):
     not_residing_button = InlineKeyboardButton("Не живу тут", callback_data="not_residing")
     keyboard.add(confirm_button, not_residing_button)
     bot.send_message(call.message.chat.id, "Пожалуйста подтвердите ваше проживание:", reply_markup=keyboard)
-    # Запрос к таблице groups (хотя данные из неё не используются) для логирования.
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM groups")
-    group_ids = cursor.fetchall()
-    logging.info(f"Group IDs: {group_ids}")
-    conn.close()
 
 # ====================================================================
 # Callback-обработчик для пользователей, сообщающих, что не являются жильцами
@@ -814,15 +696,15 @@ def not_residing_handler(call):
     bot.send_message(call.message.chat.id, "Чат предназначен только для жильцов.")
     source_id = get_source_chat_id(user_id)
     now = datetime.now().isoformat()
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET date_del = ? WHERE tg_id = ?", (now, user_id))
-    cursor.execute("SELECT id FROM users WHERE tg_id = ?", (user_id,))
-    user_record = cursor.fetchone()
+    house_id = get_house_id_by_chat_id(DB_FILE, source_id) if source_id else None
+    if house_id is None:
+        mark_user_date_del_by_tg_and_house(DB_FILE, user_id, None, now)
+        user_record = get_user_id_by_tg_and_null_house(DB_FILE, user_id)
+    else:
+        mark_user_date_del_by_tg_and_house(DB_FILE, user_id, house_id, now)
+        user_record = get_user_id_by_tg_and_house(DB_FILE, user_id, house_id)
     if user_record:
-        cursor.execute("UPDATE cars SET date_del = ? WHERE user = ? AND (date_del IS NULL OR date_del = '')", (now, user_record[0]))
-    conn.commit()
-    conn.close()
+        mark_cars_date_del_by_user_id(DB_FILE, user_record, now)
     if source_id:
         try:
             bot.kick_chat_member(source_id, user_id)
@@ -877,20 +759,11 @@ def confirm_residence_handler(call):
     """
     user_id = call.from_user.id
     source_chat = get_source_chat_id(user_id)
-    house_id = None
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    if source_chat:
-         cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (source_chat,))
-         house_row = cursor.fetchone()
-         if house_row:
-              house_id = house_row[0]
-    cursor.execute("SELECT id, name, date_del FROM users WHERE tg_id = ? AND house = ?", (user_id, house_id))
-    user_record = cursor.fetchone()
+    house_id = get_house_id_by_chat_id(DB_FILE, source_chat) if source_chat else None
+    user_record = get_user_full_record_by_tg_and_house(DB_FILE, user_id, house_id)
     if user_record:
         if not user_record[2] or user_record[2].strip() == "":
             bot.send_message(call.message.chat.id, f"{user_record[1]}, мы тебя узнали и ты уже зарегистрирован.")
-            conn.close()
             bot.answer_callback_query(call.id)
             return
         else:
@@ -899,11 +772,9 @@ def confirm_residence_handler(call):
             no_button = InlineKeyboardButton("Нет", callback_data="return_no")
             keyboard.add(yes_button, no_button)
             bot.send_message(call.message.chat.id, f"Привет {user_record[1]}! Хотите вернуться в группу?", reply_markup=keyboard)
-            conn.close()
             bot.answer_callback_query(call.id)
             return
     else:
-         conn.close()
          bot.send_message(call.message.chat.id, "Ответьте на несколько вопросов, пожалуйста. Данные на серверах хранятся в зашифрованном виде.")
          registration.ask_name(call.message.chat.id, user_id)
          bot.answer_callback_query(call.id)
@@ -921,25 +792,123 @@ def db_handler(message):
     if message.from_user.id != int(ADMIN_ID):
         bot.send_message(message.chat.id, "Нет доступа")
         return
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    output = "Таблица houses\n id | house_name | chat_id | house_city | house_address | date_add | date_del \n"
-    cursor.execute("SELECT * FROM houses")
-    for row in cursor.fetchall():
-        output += " | ".join(map(str, row)) + "\n"
-    output += "\nТаблица users\n id | tg_id | name | surname | house | apartment | phone | date_add | date_del \n"
-    cursor.execute("SELECT * FROM users")
-    for row in cursor.fetchall():
-        output += " | ".join(map(str, row)) + "\n"
-    output += "\nТаблица cars\n id | user | autonum | date_add | date_del \n"
-    cursor.execute("SELECT * FROM cars")
-    for row in cursor.fetchall():
-        output += " | ".join(map(str, row)) + "\n"
-    conn.close()
+    output = dump_tables_text(DB_FILE)
     max_length = 4096
     # Если вывод слишком длинный, отправляем его порциями.
     for i in range(0, len(output), max_length):
         bot.send_message(message.chat.id, output[i:i+max_length])
+
+
+def send_chunked_report(chat_id, report):
+    max_length = 4096
+    if not report:
+        bot.send_message(chat_id, "Нет данных.")
+        return
+    for i in range(0, len(report), max_length):
+        bot.send_message(chat_id, report[i:i + max_length])
+
+
+# ====================================================================
+# Обработчик команды /pending для администратора
+# ====================================================================
+@bot.message_handler(commands=['pending'])
+def pending_handler(message):
+    """
+    Показывает администратору текущие pending-заявки из памяти.
+    """
+    if message.from_user.id != int(ADMIN_ID):
+        bot.send_message(message.chat.id, "Нет доступа.")
+        return
+    if not pending_users:
+        bot.send_message(message.chat.id, "Нет pending-заявок.")
+        return
+
+    report_lines = ["Pending-заявки:"]
+    for user_id in sorted(pending_users):
+        data = pending_users[user_id]
+        source_chat = data.get("source_chat_id", "не указан")
+        status = data.get("status", "не указан")
+        reason = data.get("reason")
+        join_time = data.get("join_time")
+        join_time_text = join_time.isoformat() if hasattr(join_time, "isoformat") else str(join_time) if join_time else "не указано"
+        line = f"- user {user_id}: чат {source_chat}, статус {status}, вход {join_time_text}"
+        if reason:
+            line += f", причина: {reason}"
+        report_lines.append(line)
+    send_chunked_report(message.chat.id, "\n".join(report_lines))
+
+
+# ====================================================================
+# Обработчик команды /users для администратора
+# ====================================================================
+@bot.message_handler(commands=['users'])
+def users_handler(message):
+    """
+    Показывает активных пользователей по указанной группе.
+    """
+    if message.from_user.id != int(ADMIN_ID):
+        bot.send_message(message.chat.id, "Нет доступа.")
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.send_message(message.chat.id, "Укажите ID группы, например: /users -123456789")
+        return
+    group_id_check = parts[1]
+    try:
+        house_id = get_house_id_by_chat_id(DB_FILE, group_id_check)
+        if not house_id:
+            bot.send_message(message.chat.id, f"Для группы {group_id_check} не найден дом в базе.")
+            return
+        users_rows = get_active_user_rows_by_house(DB_FILE, house_id)
+        if not users_rows:
+            bot.send_message(message.chat.id, f"В группе {group_id_check} нет активных пользователей.")
+            return
+        report_lines = [f"Активные пользователи группы {group_id_check}:"]
+        for tg_id, name, surname, apartment, phone, date_add in users_rows:
+            report_lines.append(
+                f"- кв. {apartment or 'не указана'}: {name or 'без имени'} {surname or ''}".strip()
+                + f" (tg_id={tg_id}, phone={phone or 'не указан'})"
+            )
+        send_chunked_report(message.chat.id, "\n".join(report_lines))
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
+
+
+# ====================================================================
+# Обработчик команды /apartment для администратора
+# ====================================================================
+@bot.message_handler(commands=['apartment'])
+def apartment_handler(message):
+    """
+    Ищет активных пользователей по номеру квартиры в указанной группе.
+    """
+    if message.from_user.id != int(ADMIN_ID):
+        bot.send_message(message.chat.id, "Нет доступа.")
+        return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        bot.send_message(message.chat.id, "Укажите ID группы и номер квартиры, например: /apartment -123456789 12")
+        return
+    group_id_check = parts[1]
+    apartment = parts[2].strip()
+    try:
+        house_id = get_house_id_by_chat_id(DB_FILE, group_id_check)
+        if not house_id:
+            bot.send_message(message.chat.id, f"Для группы {group_id_check} не найден дом в базе.")
+            return
+        users_rows = search_active_user_rows_by_apartment(DB_FILE, house_id, apartment)
+        if not users_rows:
+            bot.send_message(message.chat.id, f"В группе {group_id_check} не найдено активных пользователей в квартире {apartment}.")
+            return
+        report_lines = [f"Квартира {apartment} в группе {group_id_check}:"]
+        for tg_id, name, surname, apartment_value, phone, date_add in users_rows:
+            report_lines.append(
+                f"- {name or 'без имени'} {surname or ''}".strip()
+                + f" (tg_id={tg_id}, phone={phone or 'не указан'})"
+            )
+        send_chunked_report(message.chat.id, "\n".join(report_lines))
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Ошибка при проверке: {e}")
 
 # ====================================================================
 # Обработчик команды /check для администратора (проверка регистрации в указанном чате)
@@ -963,18 +932,11 @@ def check_handler(message):
         return
     group_id_check = parts[1]
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM houses WHERE chat_id = ?", (group_id_check,))
-        house = cursor.fetchone()
-        if not house:
+        house_id = get_house_id_by_chat_id(DB_FILE, group_id_check)
+        if not house_id:
             bot.send_message(message.chat.id, f"Для группы {group_id_check} не найден дом в базе.")
-            conn.close()
             return
-        house_id = house[0]
-        cursor.execute("SELECT tg_id FROM users WHERE house = ? AND (date_del IS NULL OR date_del = '')", (house_id,))
-        users_in_house = cursor.fetchall()
-        conn.close()
+        users_in_house = get_active_user_tg_ids_by_house(DB_FILE, house_id)
         if not users_in_house:
             bot.send_message(message.chat.id, f"В группе {group_id_check} нет зарегистрированных пользователей.")
         else:
@@ -998,16 +960,11 @@ def checkall_handler(message):
         bot.send_message(message.chat.id, "Нет доступа.")
         return
     try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id, id FROM houses")
-        houses_list = cursor.fetchall()
+        houses_list = get_active_house_rows(DB_FILE)
         report = ""
         for chat_id, house_id in houses_list:
-            cursor.execute("SELECT COUNT(*) FROM users WHERE house = ? AND (date_del IS NULL OR date_del = '')", (house_id,))
-            count = cursor.fetchone()[0]
+            count = count_active_users_by_house(DB_FILE, house_id)
             report += f"Группа {chat_id}: зарегистрировано {count} пользователей\n"
-        conn.close()
         if report == "":
             report = "Нет данных по группам."
         bot.send_message(message.chat.id, report)
@@ -1047,4 +1004,9 @@ def confirm_registration_no_handler(call):
 # Запуск бота
 # ====================================================================
 # Запускаем постоянное прослушивание входящих сообщений (polling) от Telegram.
-bot.polling()
+while True:
+    try:
+        bot.polling()
+    except RequestException as e:
+        logging.error("Не удалось подключиться к Telegram API: %s", e.__class__.__name__)
+        time.sleep(30)
