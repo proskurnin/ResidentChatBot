@@ -41,6 +41,40 @@ SCHEMA_STATEMENTS = (
         FOREIGN KEY(user) REFERENCES users(id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id INTEGER NOT NULL,
+        user INTEGER,
+        house INTEGER,
+        source_chat_id INTEGER,
+        name TEXT,
+        surname TEXT,
+        apartment TEXT,
+        phone TEXT,
+        photo_file_id TEXT,
+        status TEXT NOT NULL,
+        reason TEXT,
+        decision_note TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        decided_at TEXT,
+        decided_by INTEGER,
+        FOREIGN KEY(user) REFERENCES users(id),
+        FOREIGN KEY(house) REFERENCES houses(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS admin_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id INTEGER,
+        tg_id INTEGER,
+        action TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT,
+        FOREIGN KEY(application_id) REFERENCES applications(id)
+    )
+    """,
 )
 
 
@@ -206,6 +240,213 @@ def insert_car_for_user(db_file, user_id, autonum):
         cursor = conn.cursor()
         cursor.execute("INSERT INTO cars (user, autonum) VALUES (?, ?)", (user_id, autonum))
         conn.commit()
+
+
+def insert_application(
+    db_file,
+    tg_id,
+    user_id,
+    house_id,
+    source_chat_id,
+    name,
+    surname,
+    apartment,
+    phone,
+    photo_file_id,
+    status,
+    created_at,
+    updated_at,
+    reason=None,
+):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO applications (
+                tg_id, user, house, source_chat_id, name, surname, apartment, phone,
+                photo_file_id, status, reason, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tg_id,
+                user_id,
+                house_id,
+                source_chat_id,
+                name,
+                surname,
+                apartment,
+                phone,
+                photo_file_id,
+                status,
+                reason,
+                created_at,
+                updated_at,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_latest_application_id_by_tg_and_house(db_file, tg_id, house_id):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        if house_id is None:
+            cursor.execute(
+                "SELECT id FROM applications WHERE tg_id = ? AND house IS NULL ORDER BY id DESC LIMIT 1",
+                (tg_id,),
+            )
+        else:
+            cursor.execute(
+                "SELECT id FROM applications WHERE tg_id = ? AND house = ? ORDER BY id DESC LIMIT 1",
+                (tg_id, house_id),
+            )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
+def update_application_status_by_id(
+    db_file,
+    application_id,
+    status,
+    updated_at,
+    decided_at=None,
+    decided_by=None,
+    reason=None,
+    decision_note=None,
+):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE applications
+            SET status = ?,
+                updated_at = ?,
+                decided_at = COALESCE(?, decided_at),
+                decided_by = COALESCE(?, decided_by),
+                reason = COALESCE(?, reason),
+                decision_note = COALESCE(?, decision_note)
+            WHERE id = ?
+            """,
+            (status, updated_at, decided_at, decided_by, reason, decision_note, application_id),
+        )
+        conn.commit()
+
+
+def update_latest_application_status_by_tg_and_house(
+    db_file,
+    tg_id,
+    house_id,
+    status,
+    updated_at,
+    decided_at=None,
+    decided_by=None,
+    reason=None,
+    decision_note=None,
+):
+    application_id = get_latest_application_id_by_tg_and_house(db_file, tg_id, house_id)
+    if application_id is None:
+        return None
+    update_application_status_by_id(
+        db_file,
+        application_id,
+        status,
+        updated_at,
+        decided_at=decided_at,
+        decided_by=decided_by,
+        reason=reason,
+        decision_note=decision_note,
+    )
+    return application_id
+
+
+def get_dashboard_totals(db_file):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM houses WHERE date_del IS NULL OR date_del = ''")
+        houses_total = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM users WHERE date_del IS NULL OR date_del = ''")
+        active_users = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status IN ('pending_review', 'photo_requested_again')")
+        pending_applications = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status = 'approved'")
+        approved_applications = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status = 'denied'")
+        denied_applications = cursor.fetchone()[0] or 0
+        return {
+            "houses_total": houses_total,
+            "active_users": active_users,
+            "pending_applications": pending_applications,
+            "approved_applications": approved_applications,
+            "denied_applications": denied_applications,
+        }
+
+
+def get_recent_application_rows(db_file, limit=12, statuses=None):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        sql = """
+            SELECT a.id, a.tg_id, a.name, a.surname, a.apartment, a.phone, a.photo_file_id,
+                   a.status, a.reason, a.decision_note, a.created_at, a.updated_at,
+                   a.decided_at, a.decided_by, a.source_chat_id, h.chat_id, h.house_name
+            FROM applications a
+            LEFT JOIN houses h ON h.id = a.house
+        """
+        params = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            sql += f" WHERE a.status IN ({placeholders})"
+            params.extend(statuses)
+        sql += " ORDER BY a.id DESC LIMIT ?"
+        params.append(limit)
+        cursor.execute(sql, params)
+        return cursor.fetchall()
+
+
+def get_pending_application_rows(db_file, limit=20):
+    return get_recent_application_rows(db_file, limit=limit, statuses=("pending_review", "photo_requested_again"))
+
+
+def get_application_row_by_id(db_file, application_id):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT a.id, a.tg_id, a.name, a.surname, a.apartment, a.phone, a.photo_file_id,
+                   a.status, a.reason, a.decision_note, a.created_at, a.updated_at,
+                   a.decided_at, a.decided_by, a.source_chat_id, a.house, h.chat_id, h.house_name
+            FROM applications a
+            LEFT JOIN houses h ON h.id = a.house
+            WHERE a.id = ?
+            """,
+            (application_id,),
+        )
+        return cursor.fetchone()
+
+
+def record_admin_action(db_file, application_id, tg_id, action, note, created_at):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO admin_actions (application_id, tg_id, action, note, created_at) VALUES (?, ?, ?, ?, ?)",
+            (application_id, tg_id, action, note, created_at),
+        )
+        conn.commit()
+
+
+def get_recent_admin_actions(db_file, limit=20):
+    with connect(db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, application_id, tg_id, action, note, created_at
+            FROM admin_actions
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return cursor.fetchall()
 
 
 def get_user_record_by_tg_and_house(db_file, tg_id, house_id):

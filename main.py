@@ -55,6 +55,9 @@ from repositories.db import (
     get_user_registration_profile_by_tg,
     initialize_schema,
     dump_tables_text,
+    insert_application,
+    record_admin_action,
+    update_latest_application_status_by_tg_and_house,
     mark_cars_date_del_by_tg,
     mark_cars_date_del_by_user_id,
     mark_user_date_del_by_tg_and_house,
@@ -432,6 +435,26 @@ def photo_handler(message):
             # Отправляем собранную информацию и фото админу.
             bot.send_message(ADMIN_ID, registration_info)
             bot.send_photo(chat_id=ADMIN_ID, photo=message.photo[-1].file_id, reply_markup=keyboard)
+            try:
+                user_record_id = get_user_id_by_tg_and_house(DB_FILE, user_id, house_id) if house_id is not None else get_user_id_by_tg_and_null_house(DB_FILE, user_id)
+                now = datetime.now().isoformat()
+                insert_application(
+                    DB_FILE,
+                    user_id,
+                    user_record_id,
+                    house_id,
+                    source_chat_id,
+                    name,
+                    surname,
+                    apartment,
+                    phone,
+                    message.photo[-1].file_id,
+                    "pending_review",
+                    now,
+                    now,
+                )
+            except Exception as e:
+                logging.error("Ошибка сохранения заявки для web dashboard: %s", e)
             # Уведомляем пользователя о получении фото.
             bot.send_message(user_id, "Фото получено. Ожидайте подтверждения.")
 
@@ -487,6 +510,20 @@ def allow_access(call):
 
         # После обновления записи пользователя сбрасываем date_del и устанавливаем date_add для всех записей автомобилей этого пользователя.
         activate_cars_by_tg(DB_FILE, user_id, now)
+        try:
+            application_id = update_latest_application_status_by_tg_and_house(
+                DB_FILE,
+                user_id,
+                house_id,
+                "approved",
+                now,
+                decided_at=now,
+                decided_by=ADMIN_ID,
+            )
+            if application_id:
+                record_admin_action(DB_FILE, application_id, ADMIN_ID, "allow", None, now)
+        except Exception as e:
+            logging.error("Ошибка обновления статуса заявки при allow: %s", e)
 
     bot.send_message(user_id, f"Доступ разрешён и вы можете пользоваться чатом жильцов" +
                      (f" (@{bot.get_chat(source_chat_id).username})" if bot.get_chat(source_chat_id).username else "") + ".")
@@ -515,6 +552,17 @@ def deny_access(call):
     try:
         house_id = get_house_id_by_chat_id(DB_FILE, source_chat_id)
         mark_user_date_del_by_tg_and_house(DB_FILE, user_id, house_id, now)
+        application_id = update_latest_application_status_by_tg_and_house(
+            DB_FILE,
+            user_id,
+            house_id,
+            "denied",
+            now,
+            decided_at=now,
+            decided_by=ADMIN_ID,
+        )
+        if application_id:
+            record_admin_action(DB_FILE, application_id, ADMIN_ID, "deny", None, now)
     except Exception as e:
         logging.error(f"Ошибка обновления записи для {user_id} при отклонении: {e}")
     member = None
@@ -598,6 +646,21 @@ def save_reason(message):
             user_first_name = str(user_id)
         group_msg = (f"@{user_first_name}, администратор запросил новое фото. Проверьте личные сообщения.")
         bot.send_message(src_chat, group_msg)
+        try:
+            house_id = get_house_id_by_chat_id(DB_FILE, src_chat)
+            application_id = update_latest_application_status_by_tg_and_house(
+                DB_FILE,
+                user_id,
+                house_id,
+                "photo_requested_again",
+                datetime.now().isoformat(),
+                reason=reason,
+                decision_note=reason,
+            )
+            if application_id:
+                record_admin_action(DB_FILE, application_id, ADMIN_ID, "request_photo", reason, datetime.now().isoformat())
+        except Exception as e:
+            logging.error("Ошибка обновления заявки при request_photo: %s", e)
     else:
         logging.error("src_chat не определён, уведомление не отправлено.")
     # Сбрасываем состояние администратора
