@@ -1,0 +1,2 @@
+"""ResidentChatBot web application package."""
+
