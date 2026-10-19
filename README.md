@@ -8,6 +8,7 @@ Telegram-бот для закрытого домового чата. Бот пр
 - On the server: `systemd` service `residentchatbot.service`
 - Config: `.env`
 - Storage: local SQLite database `database.db`
+- Web dashboard: `python -m webapp.app`, on the server `residentchatbot-web.service`
 
 The bot currently uses a proxy for Telegram API access when it is configured in the service environment.
 
@@ -39,6 +40,11 @@ python -m pytest
 - `LOG_LEVEL` - optional logging level, for example `INFO` or `WARNING`.
 - `HTTP_PROXY` / `HTTPS_PROXY` - optional, for server-side Telegram access.
 
+- `WEB_BASE_PATH` - dashboard URL prefix, default `/residentchatbot`.
+- `WEB_BIND_HOST` / `WEB_BIND_PORT` - dashboard listen address, default `127.0.0.1:8080`. Keep it on localhost and publish it through a reverse proxy with HTTPS.
+- `WEB_SERVICE_NAME` - systemd unit whose status the dashboard shows, default `residentchatbot.service`.
+- `WEB_ADMIN_USER` / `WEB_ADMIN_PASSWORD` - HTTP Basic credentials for the dashboard. With an empty password every page except `/health` is closed.
+
 Configuration is now loaded centrally from `config.py`, which reads `.env` when present and keeps systemd `EnvironmentFile` values intact.
 
 ## Current bot commands
@@ -54,6 +60,16 @@ Configuration is now loaded centrally from `config.py`, which reads `.env` when 
 
 The bot also uses inline callback actions for registration, approval, denial, and photo requests.
 
+## Web dashboard
+
+Read-only dashboard over the same SQLite database. Pages:
+
+- `<WEB_BASE_PATH>` - totals, recent applications, admin actions, bot service status.
+- `<WEB_BASE_PATH>/adm` - pending applications and recent admin decisions.
+- `<WEB_BASE_PATH>/health` - public liveness check, returns `ok`.
+
+Both pages show resident names, phones and apartments, so they require `WEB_ADMIN_USER` / `WEB_ADMIN_PASSWORD`. Basic auth sends the password in clear text: expose the dashboard only via HTTPS.
+
 ## Manual flow check
 
 1. Open a private chat with the bot and send `/start`.
@@ -66,6 +82,6 @@ The bot also uses inline callback actions for registration, approval, denial, an
 
 ## Notes
 
-- The project currently stores state partly in memory and partly in SQLite.
+- The project currently stores state partly in memory and partly in SQLite. Applications and admin decisions are stored in the `applications` and `admin_actions` tables.
 - Automated tests are available with `python -m pytest`.
 - Future refactoring should move bot handlers, services, and database access into separate modules gradually, without changing the user flow first.

@@ -10,9 +10,18 @@ Release versions follow semantic versioning (`MAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+### Added
+- `applications` and `admin_actions` SQLite tables: the bot records each access application and every admin decision (`allow`, `deny`, `request_photo`).
+- Read-only web dashboard `webapp/app.py` (`python -m webapp.app`, service `residentchatbot-web.service`): totals, recent and pending applications, admin action history, bot service status, public `/health`.
+- `WEB_*` settings in `config.py` and `.env.example`.
+- Tests for the application repository helpers and the web dashboard.
+
+### Security
+- Every dashboard page that shows resident data requires HTTP Basic auth; an empty `WEB_ADMIN_PASSWORD` denies all access.
+- `WEB_BIND_HOST` defaults to `127.0.0.1`; credentials are compared with `hmac.compare_digest`.
+
 ### Planned
 - Stage 8 admin work that is not yet released:
-  - history of admin decisions;
   - resend application;
   - block user;
   - optional rejection comment.
