@@ -4,11 +4,19 @@ This project follows Keep a Changelog and Semantic Versioning.
 
 `PROJECT_SPEC.md` remains the living implementation plan and progress tracker.
 
-Current baseline tag: `v0.2.0`.
-Next planned release: `v0.2.1`.
+Current baseline tag: `v0.3.0`.
+Next planned release: `v0.3.1`.
 Release versions follow semantic versioning (`MAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
+
+### Planned
+- Stage 8 admin work that is not yet released:
+  - resend application;
+  - block user;
+  - optional rejection comment.
+
+## [v0.3.0] - 2026-10-19
 
 ### Added
 - `applications` and `admin_actions` SQLite tables: the bot records each access application and every admin decision (`allow`, `deny`, `request_photo`).
@@ -19,12 +27,6 @@ Release versions follow semantic versioning (`MAJOR.MINOR.PATCH`).
 ### Security
 - Every dashboard page that shows resident data requires HTTP Basic auth; an empty `WEB_ADMIN_PASSWORD` denies all access.
 - `WEB_BIND_HOST` defaults to `127.0.0.1`; credentials are compared with `hmac.compare_digest`.
-
-### Planned
-- Stage 8 admin work that is not yet released:
-  - resend application;
-  - block user;
-  - optional rejection comment.
 
 ## [v0.2.0] - 2026-05-22
 
