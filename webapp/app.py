@@ -8,6 +8,7 @@ framework dependency.
 from __future__ import annotations
 
 import base64
+import hmac
 from dataclasses import dataclass
 from html import escape
 import os
@@ -378,7 +379,9 @@ def is_admin_authenticated(headers) -> bool:
     if not credentials:
         return False
     username, password = credentials
-    return username == CONFIG.admin_user and password == CONFIG.admin_password
+    user_ok = hmac.compare_digest(username.encode("utf-8"), CONFIG.admin_user.encode("utf-8"))
+    password_ok = hmac.compare_digest(password.encode("utf-8"), CONFIG.admin_password.encode("utf-8"))
+    return user_ok and password_ok
 
 
 class ResidentChatBotWebHandler(BaseHTTPRequestHandler):
@@ -423,6 +426,8 @@ class ResidentChatBotWebHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == base:
+            if not self._require_admin():
+                return
             self._send_html(render_dashboard())
             return
         if path == f"{base}/adm":

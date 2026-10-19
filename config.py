@@ -24,7 +24,7 @@ TELEGRAM_PROXY = (
     or os.getenv("http_proxy")
 )
 WEB_BASE_PATH = os.getenv("WEB_BASE_PATH", "/residentchatbot").rstrip("/") or "/residentchatbot"
-WEB_BIND_HOST = os.getenv("WEB_BIND_HOST", "0.0.0.0")
+WEB_BIND_HOST = os.getenv("WEB_BIND_HOST", "127.0.0.1")
 WEB_BIND_PORT = int(os.getenv("WEB_BIND_PORT", "8080"))
 WEB_SERVICE_NAME = os.getenv("WEB_SERVICE_NAME", "residentchatbot.service")
 WEB_ADMIN_USER = os.getenv("WEB_ADMIN_USER", "residentchatbot")
